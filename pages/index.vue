@@ -47,7 +47,7 @@
           <h1 class="text-xl font-semibold">Agent Dashboard</h1>
           <!-- Active tasks indicator -->
           <div v-if="activeTasks > 0" class="flex items-center gap-2 text-sm text-blue-400">
-            <SpinnerIcon class="w-4 h-4 animate-spin" />
+            <ArrowPathIcon class="w-4 h-4 animate-spin" />
             <span class="font-medium">{{ activeTasks }} active task{{ activeTasks > 1 ? 's' : '' }}</span>
           </div>
         </div>
@@ -132,7 +132,7 @@ import {
   CogIcon,
   TrashIcon,
   PaperAirplaneIcon,
-  SpinnerIcon
+  ArrowPathIcon
 } from '@heroicons/vue/24/outline'
 import ChatMessage from '~/components/ChatMessage.vue'
 import SettingsModal from '~/components/SettingsModal.vue'
@@ -432,4 +432,3 @@ watch(currentThread, () => {
   })
 }, { deep: true })
 </script>
-
