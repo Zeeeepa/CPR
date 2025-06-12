@@ -122,24 +122,23 @@ class AgentCallback:
         if error:
             event_data["error"] = error
             
-        await self.queue.put(event_data)
+        # Format as proper SSE event
+        event_str = f"data: {json.dumps(event_data)}\n\n"
+        await self.queue.put(event_str)
         
         if status in ["completed", "failed"]:
             self.completed = True
             if error:
                 self.error = error
             # Send completion event
-            await self.queue.put("[DONE]")
+            await self.queue.put("data: [DONE]\n\n")
 
     async def get_events(self):
         """Get events from the queue"""
         while not self.completed or not self.queue.empty():
             try:
                 event = await self.queue.get()
-                if event == "[DONE]":
-                    yield "data: [DONE]\n\n"
-                    break
-                yield f"data: {json.dumps(event)}\n\n"
+                yield event
             except Exception as e:
                 logger.error(f"Error getting events: {e}")
                 yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
