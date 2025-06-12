@@ -57,10 +57,10 @@
       </div>
       
       <!-- Progress Steps (for AI messages) -->
-      <div v-if="message.role === 'assistant' && message.progressSteps" class="mb-4">
+      <div v-if="message.role === 'assistant' && message.steps && !message.sent" class="mb-4">
         <div class="space-y-2">
           <div
-            v-for="step in message.progressSteps"
+            v-for="step in message.steps"
             :key="step.id"
             class="progress-step"
             :class="step.status"
@@ -201,3 +201,25 @@ const copyMessage = async () => {
   }
 }
 </script>
+
+<style scoped>
+.progress-step {
+  @apply flex items-center gap-3 p-2 rounded-lg transition-all duration-300;
+}
+
+.progress-step.pending {
+  @apply text-gray-400 bg-gray-800/30;
+}
+
+.progress-step.active {
+  @apply text-blue-400 bg-blue-900/20 border border-blue-800/30;
+}
+
+.progress-step.completed {
+  @apply text-green-400 bg-green-900/20;
+}
+
+.progress-step.failed {
+  @apply text-red-400 bg-red-900/20;
+}
+</style>
