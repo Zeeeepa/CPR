@@ -219,7 +219,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import {
@@ -251,9 +251,10 @@ const connectionStatus = ref({
 
 // Settings
 const settings = ref({
-  codegenToken: '',
-  codegenOrgId: '',
-  backendUrl: 'http://localhost:8887'
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:8887',
+  orgId: '',
+  token: '',
+  apiBaseUrl: ''
 })
 
 // Computed
@@ -293,19 +294,52 @@ const deleteThread = (threadId) => {
   }
 }
 
-const sendMessage = async (message: string) => {
-  if (!message.trim()) return
+interface Thread {
+  id: string;
+  name: string;
+  messages: Message[];
+  lastActivity: Date;
+}
+
+interface Message {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  sent: boolean;
+  steps?: Array<{
+    id: number;
+    title: string;
+    description: string;
+    status: 'pending' | 'active' | 'completed' | 'failed';
+  }>;
+  taskId?: string | null;
+  webUrl?: string | null;
+  error?: boolean;
+}
+
+const messages = ref<Message[]>([])
+const newMessage = ref('')
+const activeTasks = ref(0)
+const currentThread = ref<Thread | null>(null)
+const threadId = ref<string | null>(null)
+
+const sendMessage = async () => {
+  if (!newMessage.value.trim()) return
 
   // Add user message
-  messages.value.push({
+  const userMessage: Message = {
     id: Date.now(),
     role: 'user',
-    content: message,
+    content: newMessage.value.trim(),
     sent: true
-  })
+  }
+  messages.value.push(userMessage)
+
+  const prompt = newMessage.value.trim()
+  newMessage.value = ''
 
   // Add AI message placeholder
-  const aiMessage = {
+  const aiMessage: Message = {
     id: Date.now() + 1,
     role: 'assistant',
     content: '',
@@ -334,7 +368,7 @@ const sendMessage = async (message: string) => {
         'X-API-Base-URL': settings.value.apiBaseUrl || ''
       },
       body: JSON.stringify({
-        prompt: message,
+        prompt,
         stream: true,
         thread_id: threadId.value
       })
@@ -368,7 +402,7 @@ const sendMessage = async (message: string) => {
         console.log('Stream update:', parsed)
 
         // Update step information
-        if (parsed.current_step) {
+        if (parsed.current_step && aiMessage.steps) {
           const stepIndex = aiMessage.steps.findIndex(s => 
             s.description.toLowerCase().includes(parsed.current_step.toLowerCase())
           )
@@ -376,10 +410,12 @@ const sendMessage = async (message: string) => {
             aiMessage.steps[stepIndex].status = 'completed'
             // Mark previous steps as completed
             for (let i = 0; i < stepIndex; i++) {
-              aiMessage.steps[i].status = 'completed'
+              if (aiMessage.steps[i]) {
+                aiMessage.steps[i].status = 'completed'
+              }
             }
             // Set next step as active if available
-            if (stepIndex < aiMessage.steps.length - 1) {
+            if (stepIndex < aiMessage.steps.length - 1 && aiMessage.steps[stepIndex + 1]) {
               aiMessage.steps[stepIndex + 1].status = 'active'
             }
           }
@@ -398,7 +434,9 @@ const sendMessage = async (message: string) => {
           aiMessage.content = parsed.result || 'Task completed successfully.'
           aiMessage.sent = true
           // Mark all steps as completed
-          aiMessage.steps.forEach(step => step.status = 'completed')
+          if (aiMessage.steps) {
+            aiMessage.steps.forEach(step => step.status = 'completed')
+          }
         }
         // Handle errors
         else if (parsed.status === 'failed' || parsed.status === 'error') {
@@ -406,11 +444,13 @@ const sendMessage = async (message: string) => {
           aiMessage.sent = true
           aiMessage.error = true
           // Mark remaining steps as failed
-          aiMessage.steps.forEach(step => {
-            if (step.status === 'pending' || step.status === 'active') {
-              step.status = 'failed'
-            }
-          })
+          if (aiMessage.steps) {
+            aiMessage.steps.forEach(step => {
+              if (step.status === 'pending' || step.status === 'active') {
+                step.status = 'failed'
+              }
+            })
+          }
         }
       } catch (e) {
         console.error('Error processing stream message:', e)
@@ -428,11 +468,13 @@ const sendMessage = async (message: string) => {
         aiMessage.sent = true
         aiMessage.error = true
         // Mark remaining steps as failed
-        aiMessage.steps.forEach(step => {
-          if (step.status === 'pending' || step.status === 'active') {
-            step.status = 'failed'
-          }
-        })
+        if (aiMessage.steps) {
+          aiMessage.steps.forEach(step => {
+            if (step.status === 'pending' || step.status === 'active') {
+              step.status = 'failed'
+            }
+          })
+        }
       }
     }
 
@@ -441,11 +483,13 @@ const sendMessage = async (message: string) => {
     activeTasks.value = Math.max(0, activeTasks.value - 1)
     
     // Update AI message with error
-    aiMessage.content = `Error: ${error.message}`
+    aiMessage.content = `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
     aiMessage.sent = true
     aiMessage.error = true
     // Mark all steps as failed
-    aiMessage.steps.forEach(step => step.status = 'failed')
+    if (aiMessage.steps) {
+      aiMessage.steps.forEach(step => step.status = 'failed')
+    }
   }
 }
 
@@ -574,10 +618,10 @@ onUnmounted(() => {
   }
 })
 
-// Watch for thread changes to scroll to bottom
+// Watch for thread changes
 watch(currentThread, () => {
-  nextTick(() => {
-    scrollToBottom()
-  })
-}, { deep: true })
+  if (currentThread.value) {
+    threadId.value = currentThread.value.id
+  }
+}, { immediate: true })
 </script>
