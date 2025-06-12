@@ -83,7 +83,7 @@ def get_codegen_config() -> CodegenConfig:
     return CodegenConfig(
         org_id=os.getenv("CODEGEN_ORG_ID", "323"),
         token=os.getenv("CODEGEN_TOKEN", "sk-ce027fa7-3c8d-4beb-8c86-ed8ae982ac99"),
-        base_url=os.getenv("CODEGEN_BASE_URL")
+        base_url=os.getenv("CODEGEN_BASE_URL", "https://api.codegen.com")
     )
 
 def get_server_config() -> ServerConfig:
@@ -556,6 +556,94 @@ async def cancel_task(task_id: str):
     except Exception as e:
         logger.error(f"Error canceling task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/test-sdk")
+async def test_sdk_minimal(
+    x_org_id: Optional[str] = Header(None, alias="X-Org-ID"),
+    x_token: Optional[str] = Header(None, alias="X-Token"),
+    x_base_url: Optional[str] = Header(None, alias="X-Base-URL")
+):
+    """
+    Minimal test endpoint to validate Codegen SDK functionality
+    Bypasses chat interface complexity to isolate core API issues
+    """
+    request_id = generate_request_id()
+    logger.info(f"[{request_id}] === MINIMAL SDK TEST ===")
+    
+    try:
+        # Use credentials from headers if provided, otherwise use default config
+        org_id = x_org_id or default_codegen_config.org_id
+        token = x_token or default_codegen_config.token
+        base_url = x_base_url or default_codegen_config.base_url
+        
+        logger.info(f"[{request_id}] Test credentials:")
+        logger.info(f"[{request_id}]   - Org ID: {org_id[:8] + '...' if org_id else 'None'}")
+        logger.info(f"[{request_id}]   - Token: {'***' + token[-4:] if token else 'None'}")
+        logger.info(f"[{request_id}]   - Base URL: {base_url}")
+        
+        if not org_id or not token:
+            logger.error(f"[{request_id}] Missing credentials")
+            return {
+                "status": "error",
+                "error": "Missing org_id or token",
+                "request_id": request_id,
+                "test_type": "minimal_sdk"
+            }
+        
+        # Test 1: Agent client creation
+        logger.info(f"[{request_id}] Test 1: Creating agent client...")
+        try:
+            agent_client = get_or_create_agent_client(org_id, token, base_url)
+            logger.info(f"[{request_id}] ✅ Agent client created successfully")
+        except Exception as e:
+            logger.error(f"[{request_id}] ❌ Agent client creation failed: {e}")
+            return {
+                "status": "error",
+                "error": f"Agent client creation failed: {str(e)}",
+                "request_id": request_id,
+                "test_type": "minimal_sdk",
+                "failed_at": "agent_client_creation"
+            }
+        
+        # Test 2: Simple non-streaming message
+        logger.info(f"[{request_id}] Test 2: Testing simple message...")
+        test_prompt = "Hello! This is a minimal test. Please respond with 'SDK test successful'."
+        try:
+            result = await agent_client.process_message(test_prompt, stream=False)
+            logger.info(f"[{request_id}] ✅ Message processed successfully")
+            logger.info(f"[{request_id}] Result: {result}")
+            
+            return {
+                "status": "success",
+                "message": "SDK test completed successfully",
+                "request_id": request_id,
+                "test_type": "minimal_sdk",
+                "result": result,
+                "tests_passed": ["agent_client_creation", "simple_message"]
+            }
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] ❌ Message processing failed: {e}")
+            logger.exception(f"[{request_id}] Full traceback:")
+            return {
+                "status": "error",
+                "error": f"Message processing failed: {str(e)}",
+                "request_id": request_id,
+                "test_type": "minimal_sdk",
+                "failed_at": "message_processing",
+                "tests_passed": ["agent_client_creation"]
+            }
+            
+    except Exception as e:
+        logger.error(f"[{request_id}] ❌ Unexpected error in SDK test: {e}")
+        logger.exception(f"[{request_id}] Full traceback:")
+        return {
+            "status": "error",
+            "error": f"Unexpected error: {str(e)}",
+            "request_id": request_id,
+            "test_type": "minimal_sdk",
+            "failed_at": "unexpected"
+        }
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health_check():
