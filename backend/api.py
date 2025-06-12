@@ -8,12 +8,13 @@ import logging
 import os
 import json
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, AsyncGenerator
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
+from contextlib import asynccontextmanager
 
 # Import the official Codegen SDK
 try:
@@ -82,13 +83,34 @@ def get_server_config() -> ServerConfig:
         cors_origins=os.getenv("CORS_ORIGINS", "*").split(",")
     )
 
-# Initialize FastAPI app
+# Store active tasks and agent clients
+active_tasks: Dict[str, Any] = {}
+agent_clients: Dict[str, Agent] = {}
+
+# Lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting Codegen AI Chat Dashboard API v2.0.0")
+    logger.info(f"Codegen SDK Available: {CODEGEN_AVAILABLE}")
+    logger.info(f"Default Org ID: {default_codegen_config.org_id}")
+    logger.info(f"Server Config: {server_config.host}:{server_config.port}")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Codegen AI Chat Dashboard API")
+    active_tasks.clear()
+    agent_clients.clear()
+
+# Initialize FastAPI app with lifespan
 app = FastAPI(
     title="Codegen AI Chat Dashboard API",
     description="Backend API for Codegen AI agent chat interface",
     version="2.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -166,10 +188,6 @@ class AgentClient:
                 "task_id": None
             }
 
-# Store active tasks and agent clients
-active_tasks: Dict[str, Any] = {}
-agent_clients: Dict[str, AgentClient] = {}
-
 def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] = None) -> AgentClient:
     """Get or create an AgentClient instance"""
     if not CODEGEN_AVAILABLE:
@@ -187,7 +205,7 @@ def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] 
     
     return agent_clients[client_key]
 
-async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = None):
+async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Stream task status updates to the client with enhanced error handling"""
     try:
         max_retries = 120  # 10 minutes with 5-second intervals
@@ -383,14 +401,16 @@ async def run_task(
             "org_id": org_id
         }
         
-        # Return streaming response
+        # Return streaming response with proper SSE headers
         return StreamingResponse(
             stream_task_updates(result["task"], task_id, request.thread_id),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
+                "X-Accel-Buffering": "no",
+                "Content-Type": "text/event-stream",
+                "Transfer-Encoding": "chunked"
             }
         )
             
@@ -539,24 +559,6 @@ async def get_config():
         "active_tasks_count": len(active_tasks),
         "agent_clients_count": len(agent_clients)
     }
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Application startup tasks"""
-    logger.info("Starting Codegen AI Chat Dashboard API v2.0.0")
-    logger.info(f"Codegen SDK Available: {CODEGEN_AVAILABLE}")
-    logger.info(f"Default Org ID: {default_codegen_config.org_id}")
-    logger.info(f"Server Config: {server_config.host}:{server_config.port}")
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Application shutdown tasks"""
-    logger.info("Shutting down Codegen AI Chat Dashboard API")
-    # Clean up active tasks and agents
-    active_tasks.clear()
-    agent_clients.clear()
 
 if __name__ == "__main__":
     server_config = get_server_config()
