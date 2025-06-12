@@ -1,58 +1,94 @@
-import requests
-import json
-import sseclient
-import time
+"""
+Manual test script for SSE streaming
+"""
 
-def test_stream():
-    url = "http://localhost:8890/api/v1/run-task"
-    headers = {
-        "Content-Type": "application/json",
-    }
-    data = {
-        "prompt": "Hello!",
-        "stream": True
-    }
+import asyncio
+import json
+import os
+import sys
+from datetime import datetime
+from sseclient import SSEClient
+import requests
+
+# Configuration
+url = "http://localhost:8887/api/v1/run-task"
+org_id = os.getenv("CODEGEN_ORG_ID")
+token = os.getenv("CODEGEN_TOKEN")
+
+if not org_id or not token:
+    print("Error: CODEGEN_ORG_ID and CODEGEN_TOKEN environment variables must be set")
+    sys.exit(1)
+
+def test_streaming():
+    """Test the streaming functionality"""
+    print("\n🚀 Testing SSE streaming...\n")
+    
+    # 1. Start a task
+    print("Starting task...")
+    response = requests.post(
+        url,
+        headers={
+            "Content-Type": "application/json",
+            "X-Organization-ID": org_id,
+            "X-API-Token": token
+        },
+        json={
+            "prompt": "List all files in the current directory",
+            "stream": True
+        }
+    )
+    
+    if not response.ok:
+        print(f"Error starting task: {response.status_code}")
+        print(response.text)
+        return
+    
+    data = response.json()
+    task_id = data["task_id"]
+    print(f"Task started with ID: {task_id}")
+    
+    # 2. Connect to SSE stream
+    print("\nConnecting to SSE stream...")
+    stream_url = f"http://localhost:8887/api/v1/task/{task_id}/stream"
+    client = SSEClient(stream_url)
     
     try:
-        print("Sending request...")
-        response = requests.post(url, headers=headers, json=data, stream=True, timeout=5)
-        print(f"Response status: {response.status_code}")
+        print("\nReceiving events:")
+        print("-" * 50)
         
-        if response.status_code != 200:
-            print(f"Error: {response.text}")
-            return
-            
-        client = sseclient.SSEClient(response)
-        
-        print("\nStreaming response:")
-        start_time = time.time()
-        for event in client.events():
-            print(f"\nEvent data: {event.data}")
+        for event in client:
             if event.data == "[DONE]":
-                print("\nStream completed")
+                print("\n✅ Stream completed")
                 break
+                
             try:
                 data = json.loads(event.data)
-                print(f"Status: {data.get('status')}, Task ID: {data.get('task_id')}")
-                if "result" in data:
-                    print(f"Result: {data.get('result')}")
-                if "error" in data:
-                    print(f"Error: {data.get('error')}")
-            except json.JSONDecodeError as e:
-                print(f"Could not parse event data: {e}")
+                timestamp = datetime.fromisoformat(data["timestamp"]).strftime("%H:%M:%S")
                 
-            # Break if taking too long
-            if time.time() - start_time > 30:
-                print("\nTimeout after 30 seconds")
-                break
+                if "current_step" in data:
+                    print(f"\n[{timestamp}] Step: {data['current_step']}")
+                elif data["status"] == "completed":
+                    print(f"\n[{timestamp}] Completed: {data['result']}")
+                elif data["status"] == "failed":
+                    print(f"\n[{timestamp}] Failed: {data['error']}")
+                else:
+                    print(f"\n[{timestamp}] Status: {data['status']}")
                 
-    except requests.exceptions.RequestException as e:
-        print(f"Request error: {e}")
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
+                if "web_url" in data and data["web_url"]:
+                    print(f"View at: {data['web_url']}")
+                    
+            except json.JSONDecodeError:
+                if event.data != "heartbeat":
+                    print(f"Raw event: {event.data}")
+                
+    except KeyboardInterrupt:
+        print("\n⚠️ Test interrupted by user")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"\n❌ Error: {e}")
+    finally:
+        client.close()
+        print("-" * 50)
 
 if __name__ == "__main__":
-    test_stream()
+    test_streaming()
 
