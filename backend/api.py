@@ -401,15 +401,16 @@ async def run_task(
             "org_id": org_id
         }
         
-        # Return streaming response
+        # Return streaming response with proper SSE headers
         return StreamingResponse(
             stream_task_updates(result["task"], task_id, request.thread_id),
-            media_type="text/event-stream",  # Changed from text/plain to text/event-stream
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
-                "Content-Type": "text/event-stream"  # Added explicit Content-Type header
+                "Content-Type": "text/event-stream",
+                "Transfer-Encoding": "chunked"
             }
         )
             
