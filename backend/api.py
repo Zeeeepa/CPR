@@ -105,8 +105,10 @@ class AgentCallback:
         self.queue = asyncio.Queue()
         self.completed = False
         self.error = None
+        self.current_step = 0
+        self.total_steps = 0
 
-    async def on_status_change(self, status: str, result: Optional[str] = None, error: Optional[str] = None):
+    async def on_status_change(self, status: str, result: Optional[str] = None, error: Optional[str] = None, step_info: Optional[dict] = None):
         """Handle status change events"""
         event_data = {
             "status": status,
@@ -121,6 +123,10 @@ class AgentCallback:
             event_data["result"] = result
         if error:
             event_data["error"] = error
+            
+        # Include step information if available
+        if step_info:
+            event_data.update(step_info)
             
         # Format as proper SSE event
         event_str = f"data: {json.dumps(event_data)}\n\n"
@@ -158,13 +164,35 @@ async def monitor_task(task, callback: AgentCallback):
     """Monitor task status and trigger callbacks"""
     try:
         logger.info(f"Starting to monitor task {callback.task_id}")
-        max_retries = 60  # 2 minutes with 2-second intervals
+        max_retries = 900  # 30 minutes with 2-second intervals
         retry_count = 0
+        last_step = None
         
         while not callback.completed and retry_count < max_retries:
             task.refresh()
             status = task.status.lower() if task.status else "unknown"
             logger.info(f"Task {callback.task_id} status: {status}")
+            
+            # Extract step information from task
+            current_step = None
+            try:
+                # Try to get step information from task.result or task.summary
+                if hasattr(task, 'result') and isinstance(task.result, dict):
+                    current_step = task.result.get('current_step')
+                elif hasattr(task, 'summary') and isinstance(task.summary, dict):
+                    current_step = task.summary.get('current_step')
+            except Exception as e:
+                logger.warning(f"Could not extract step info: {e}")
+            
+            # Only send update if step has changed
+            if current_step and current_step != last_step:
+                step_info = {
+                    'current_step': current_step,
+                    'step_number': callback.current_step + 1
+                }
+                await callback.on_status_change(status, step_info=step_info)
+                last_step = current_step
+                callback.current_step += 1
             
             if status == "completed":
                 result = (
