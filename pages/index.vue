@@ -149,6 +149,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   sent: boolean;
+  timestamp: number;
   steps?: Array<{
     id: number;
     title: string;
@@ -250,7 +251,8 @@ const sendMessage = async () => {
     id: Date.now(),
     role: 'user',
     content: newMessage.value.trim(),
-    sent: true
+    sent: true,
+    timestamp: Date.now()
   }
   currentThread.value.messages.push(userMessage)
   currentThread.value.lastActivity = new Date()
@@ -264,8 +266,9 @@ const sendMessage = async () => {
     role: 'assistant',
     content: '',
     sent: false,
+    timestamp: Date.now() + 1,
     steps: [
-      { id: 1, title: 'Initializing Agent', description: 'Setting up the AI agent', status: 'pending' },
+      { id: 1, title: 'Initializing Agent', description: 'Setting up the AI agent', status: 'active' },
       { id: 2, title: 'Processing Request', description: 'Analyzing your prompt', status: 'pending' },
       { id: 3, title: 'Generating Response', description: 'Creating the response', status: 'pending' },
       { id: 4, title: 'Finalizing', description: 'Completing the task', status: 'pending' }
@@ -315,6 +318,7 @@ const sendMessage = async () => {
       try {
         if (event.data === '[DONE]') {
           console.log('Stream completed')
+          clearTimeout(timeoutId)
           eventSource.close()
           activeTasks.value = Math.max(0, activeTasks.value - 1)
           return
@@ -323,22 +327,43 @@ const sendMessage = async () => {
         const parsed = JSON.parse(event.data)
         console.log('Stream update:', parsed)
 
-        // Update step information
-        if (parsed.current_step && aiMessage.steps) {
-          const stepIndex = aiMessage.steps.findIndex(s => 
-            s.description.toLowerCase().includes(parsed.current_step.toLowerCase())
-          )
-          if (stepIndex !== -1) {
-            aiMessage.steps[stepIndex].status = 'completed'
-            // Mark previous steps as completed
-            for (let i = 0; i < stepIndex; i++) {
-              if (aiMessage.steps[i]) {
-                aiMessage.steps[i].status = 'completed'
+        // Update step information based on current_step or status
+        if (aiMessage.steps) {
+          if (parsed.current_step) {
+            // Map current_step to our step progression
+            let currentStepIndex = -1
+            const stepLower = parsed.current_step.toLowerCase()
+            
+            if (stepLower.includes('initializing') || stepLower.includes('setup')) {
+              currentStepIndex = 0
+            } else if (stepLower.includes('processing') || stepLower.includes('analyzing')) {
+              currentStepIndex = 1
+            } else if (stepLower.includes('generating') || stepLower.includes('creating')) {
+              currentStepIndex = 2
+            } else if (stepLower.includes('finalizing') || stepLower.includes('completing')) {
+              currentStepIndex = 3
+            }
+            
+            if (currentStepIndex >= 0) {
+              // Mark previous steps as completed
+              for (let i = 0; i <= currentStepIndex; i++) {
+                if (aiMessage.steps[i]) {
+                  aiMessage.steps[i].status = 'completed'
+                }
+              }
+              // Set next step as active if available
+              if (currentStepIndex < aiMessage.steps.length - 1 && aiMessage.steps[currentStepIndex + 1]) {
+                aiMessage.steps[currentStepIndex + 1].status = 'active'
               }
             }
-            // Set next step as active if available
-            if (stepIndex < aiMessage.steps.length - 1 && aiMessage.steps[stepIndex + 1]) {
-              aiMessage.steps[stepIndex + 1].status = 'active'
+          } else if (parsed.status === 'running' || parsed.status === 'active') {
+            // If no specific step but task is running, progress through steps
+            const completedSteps = aiMessage.steps.filter(s => s.status === 'completed').length
+            if (completedSteps < aiMessage.steps.length - 1) {
+              const nextStepIndex = completedSteps
+              if (aiMessage.steps[nextStepIndex] && aiMessage.steps[nextStepIndex].status !== 'active') {
+                aiMessage.steps[nextStepIndex].status = 'active'
+              }
             }
           }
         }
@@ -385,8 +410,32 @@ const sendMessage = async () => {
       }
     }
 
+    // Add timeout to prevent infinite spinning
+    const timeoutId = setTimeout(() => {
+      console.warn('Task timeout after 5 minutes')
+      eventSource.close()
+      activeTasks.value = Math.max(0, activeTasks.value - 1)
+      
+      if (!aiMessage.sent) {
+        aiMessage.content = 'Task timed out after 5 minutes. Please try again.'
+        aiMessage.sent = true
+        aiMessage.error = true
+        if (aiMessage.steps) {
+          aiMessage.steps.forEach(step => {
+            if (step.status === 'pending' || step.status === 'active') {
+              step.status = 'failed'
+            }
+          })
+        }
+        currentThread.value!.lastActivity = new Date()
+        saveToLocalStorage()
+        scrollToBottom()
+      }
+    }, 300000) // 5 minutes
+
     eventSource.onerror = (error) => {
       console.error('EventSource error:', error)
+      clearTimeout(timeoutId)
       eventSource.close()
       activeTasks.value = Math.max(0, activeTasks.value - 1)
       
@@ -432,4 +481,3 @@ watch(currentThread, () => {
   })
 }, { deep: true })
 </script>
-
