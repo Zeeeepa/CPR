@@ -293,160 +293,159 @@ const deleteThread = (threadId) => {
   }
 }
 
-const sendMessage = async () => {
-  if (!newMessage.value.trim() || !currentThread.value || isLoading.value) return
-  if (newMessage.value.length > 4000) {
-    showNotification('Message too long (max 4000 characters)', 'error')
-    return
-  }
+const sendMessage = async (message: string) => {
+  if (!message.trim()) return
 
-  const userMessage = {
-    id: uuidv4(),
+  // Add user message
+  messages.value.push({
+    id: Date.now(),
     role: 'user',
-    content: newMessage.value.trim(),
-    timestamp: new Date(),
-    status: 'sent'
-  }
+    content: message,
+    sent: true
+  })
 
-  currentThread.value.messages.push(userMessage)
-  currentThread.value.lastActivity = new Date()
-  
-  const prompt = newMessage.value.trim()
-  newMessage.value = ''
-  
-  // Create AI response placeholder with progress steps
+  // Add AI message placeholder
   const aiMessage = {
-    id: uuidv4(),
+    id: Date.now() + 1,
     role: 'assistant',
     content: '',
-    timestamp: new Date(),
-    status: 'pending',
-    taskId: null,
-    webUrl: null,
-    progressSteps: [
+    sent: false,
+    steps: [
       { id: 1, title: 'Initializing Agent', description: 'Setting up the AI agent', status: 'pending' },
       { id: 2, title: 'Processing Request', description: 'Analyzing your prompt', status: 'pending' },
       { id: 3, title: 'Generating Response', description: 'Creating the response', status: 'pending' },
       { id: 4, title: 'Finalizing', description: 'Completing the task', status: 'pending' }
     ],
-    estimatedTime: 30
+    taskId: null,
+    webUrl: null
   }
-  
-  currentThread.value.messages.push(aiMessage)
-  saveToLocalStorage()
-  scrollToBottom()
-  
-  isLoading.value = true
-  activeTasks.value++
+  messages.value.push(aiMessage)
 
   try {
+    activeTasks.value++
+
+    // Initial request to start the task
     const response = await fetch(`${settings.value.backendUrl}/api/v1/run-task`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Org-ID': settings.value.codegenOrgId,
-        'X-Token': settings.value.codegenToken
+        'X-Organization-ID': settings.value.orgId,
+        'X-API-Token': settings.value.token,
+        'X-API-Base-URL': settings.value.apiBaseUrl || ''
       },
       body: JSON.stringify({
-        prompt: prompt,
+        prompt: message,
         stream: true,
-        thread_id: currentThread.value.id
+        thread_id: threadId.value
       })
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
+      throw new Error(`HTTP error! status: ${response.status}`)
     }
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let stepIndex = 0
+    const data = await response.json()
+    console.log('Task started:', data)
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+    // Update AI message with task ID
+    if (data.task_id) {
+      aiMessage.taskId = data.task_id
+    }
 
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6)
-        if (data === '[DONE]') {
-          isLoading.value = false
+    // Connect to SSE stream for updates
+    const eventSource = new EventSource(`${settings.value.backendUrl}/api/v1/task/${data.task_id}/stream`)
+    
+    eventSource.onmessage = (event) => {
+      try {
+        if (event.data === '[DONE]') {
+          console.log('Stream completed')
+          eventSource.close()
           activeTasks.value = Math.max(0, activeTasks.value - 1)
-          // Mark all steps as completed
-          aiMessage.progressSteps.forEach(step => {
-            if (step.status !== 'completed') step.status = 'completed'
-          })
-          break
+          return
         }
 
-        try {
-          const parsed = JSON.parse(data)
-          
-          // Update AI message with status and task ID
-          if (parsed.task_id && !aiMessage.taskId) {
-            aiMessage.taskId = parsed.task_id
-            stepIndex = Math.min(stepIndex + 1, aiMessage.progressSteps.length - 1)
-          }
-          
-          if (parsed.web_url && !aiMessage.webUrl) {
-            aiMessage.webUrl = parsed.web_url
-          }
-          
-          aiMessage.status = parsed.status
-          
-          if (parsed.result) {
-            aiMessage.content = parsed.result
-            aiMessage.status = 'completed'
-            currentThread.value.lastActivity = new Date()
-            // Mark all steps as completed
-            aiMessage.progressSteps.forEach(step => step.status = 'completed')
-          } else if (parsed.status === 'completed' && !aiMessage.content) {
-            // Handle case where task is completed but no result content
-            aiMessage.content = parsed.web_url 
-              ? `Task completed successfully. [View details](${parsed.web_url})`
-              : 'Task completed successfully.'
-            aiMessage.status = 'completed'
-            currentThread.value.lastActivity = new Date()
-            aiMessage.progressSteps.forEach(step => step.status = 'completed')
-          }
-          
-          if (parsed.error) {
-            aiMessage.content = `Error: ${parsed.error}`
-            aiMessage.status = 'failed'
-            currentThread.value.lastActivity = new Date()
-            // Mark current step as failed
-            if (stepIndex < aiMessage.progressSteps.length) {
-              aiMessage.progressSteps[stepIndex].status = 'failed'
+        const parsed = JSON.parse(event.data)
+        console.log('Stream update:', parsed)
+
+        // Update step information
+        if (parsed.current_step) {
+          const stepIndex = aiMessage.steps.findIndex(s => 
+            s.description.toLowerCase().includes(parsed.current_step.toLowerCase())
+          )
+          if (stepIndex !== -1) {
+            aiMessage.steps[stepIndex].status = 'completed'
+            // Mark previous steps as completed
+            for (let i = 0; i < stepIndex; i++) {
+              aiMessage.steps[i].status = 'completed'
+            }
+            // Set next step as active if available
+            if (stepIndex < aiMessage.steps.length - 1) {
+              aiMessage.steps[stepIndex + 1].status = 'active'
             }
           }
-
-          saveToLocalStorage()
-          scrollToBottom()
-        } catch (e) {
-          console.error('Error parsing SSE data:', e)
         }
+
+        // Update task ID and web URL
+        if (parsed.task_id && !aiMessage.taskId) {
+          aiMessage.taskId = parsed.task_id
+        }
+        if (parsed.web_url) {
+          aiMessage.webUrl = parsed.web_url
+        }
+
+        // Handle completion
+        if (parsed.status === 'completed') {
+          aiMessage.content = parsed.result || 'Task completed successfully.'
+          aiMessage.sent = true
+          // Mark all steps as completed
+          aiMessage.steps.forEach(step => step.status = 'completed')
+        }
+        // Handle errors
+        else if (parsed.status === 'failed' || parsed.status === 'error') {
+          aiMessage.content = parsed.error || 'Task failed'
+          aiMessage.sent = true
+          aiMessage.error = true
+          // Mark remaining steps as failed
+          aiMessage.steps.forEach(step => {
+            if (step.status === 'pending' || step.status === 'active') {
+              step.status = 'failed'
+            }
+          })
+        }
+      } catch (e) {
+        console.error('Error processing stream message:', e)
       }
     }
+
+    eventSource.onerror = (error) => {
+      console.error('EventSource error:', error)
+      eventSource.close()
+      activeTasks.value = Math.max(0, activeTasks.value - 1)
+      
+      // Only update message if it hasn't been completed
+      if (!aiMessage.sent) {
+        aiMessage.content = 'Error: Failed to get response from agent'
+        aiMessage.sent = true
+        aiMessage.error = true
+        // Mark remaining steps as failed
+        aiMessage.steps.forEach(step => {
+          if (step.status === 'pending' || step.status === 'active') {
+            step.status = 'failed'
+          }
+        })
+      }
     }
+
   } catch (error) {
-    console.error('Error sending message:', error)
-    aiMessage.content = `Error: ${error.message}`
-    aiMessage.status = 'failed'
-    aiMessage.progressSteps.forEach(step => {
-      if (step.status === 'active' || step.status === 'pending') {
-        step.status = 'failed'
-      }
-    })
-    currentThread.value.lastActivity = new Date()
-    saveToLocalStorage()
-    showNotification(`Failed to send message: ${error.message}`, 'error')
-  } finally {
-    isLoading.value = false
+    console.error('Error:', error)
     activeTasks.value = Math.max(0, activeTasks.value - 1)
+    
+    // Update AI message with error
+    aiMessage.content = `Error: ${error.message}`
+    aiMessage.sent = true
+    aiMessage.error = true
+    // Mark all steps as failed
+    aiMessage.steps.forEach(step => step.status = 'failed')
   }
 }
 
