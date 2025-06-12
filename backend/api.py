@@ -24,9 +24,21 @@ except ImportError:
     CODEGEN_AVAILABLE = False
     print("Warning: Codegen SDK not available. Install with: pip install codegen")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure comprehensive logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('backend.log')
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Add request ID tracking
+import uuid
+def generate_request_id():
+    return str(uuid.uuid4())[:8]
 
 # Request/Response Models
 class TaskRequest(BaseModel):
@@ -339,49 +351,77 @@ async def run_task(
     Run a Codegen task with dynamic credentials
     Supports both streaming and non-streaming responses
     """
+    request_id = generate_request_id()
+    logger.info(f"[{request_id}] === NEW TASK REQUEST ===")
+    
     try:
+        # Log incoming request details
+        logger.info(f"[{request_id}] Request details:")
+        logger.info(f"[{request_id}]   - Prompt length: {len(request.prompt)}")
+        logger.info(f"[{request_id}]   - Stream: {request.stream}")
+        logger.info(f"[{request_id}]   - Thread ID: {request.thread_id}")
+        logger.info(f"[{request_id}]   - Prompt preview: {request.prompt[:100]}...")
+        
         # Use credentials from headers if provided, otherwise use default config
         org_id = x_org_id or default_codegen_config.org_id
         token = x_token or default_codegen_config.token
         base_url = x_base_url or default_codegen_config.base_url
         
+        logger.info(f"[{request_id}] Authentication details:")
+        logger.info(f"[{request_id}]   - Org ID: {org_id[:8] + '...' if org_id else 'None'}")
+        logger.info(f"[{request_id}]   - Token: {'***' + token[-4:] if token else 'None'}")
+        logger.info(f"[{request_id}]   - Base URL: {base_url}")
+        
         if not org_id or not token:
+            logger.error(f"[{request_id}] Missing credentials - org_id: {bool(org_id)}, token: {bool(token)}")
             raise HTTPException(
                 status_code=400, 
                 detail="Missing org_id or token. Provide via headers or environment variables."
             )
         
-        logger.info(f"Running task for org_id: {org_id}, prompt length: {len(request.prompt)}")
+        logger.info(f"[{request_id}] Creating agent client...")
         
         # Get or create agent client
+        logger.info(f"[{request_id}] Getting agent client...")
         agent_client = get_or_create_agent_client(org_id, token, base_url)
+        logger.info(f"[{request_id}] Agent client created successfully")
         
         # Process the message
+        logger.info(f"[{request_id}] Processing message with agent...")
+        logger.debug(f"[{request_id}] Full prompt: {request.prompt}")
         result = await agent_client.process_message(request.prompt, stream=request.stream)
+        logger.info(f"[{request_id}] Agent response received: {result}")
         
         if result["status"] == "error":
+            logger.error(f"[{request_id}] Agent returned error: {result['error']}")
             raise HTTPException(status_code=500, detail=result["error"])
         
         if not request.stream:
             # Return direct response for non-streaming
-            return TaskResponse(
+            logger.info(f"[{request_id}] Returning non-streaming response")
+            response = TaskResponse(
                 result=result.get("result"),
                 status=result["status"],
                 task_id=result["task_id"],
                 web_url=result.get("web_url"),
                 thread_id=request.thread_id
             )
+            logger.info(f"[{request_id}] Non-streaming response: {response}")
+            return response
         
         # Store task for status tracking
         task_id = result["task_id"]
+        logger.info(f"[{request_id}] Setting up streaming for task_id: {task_id}")
         active_tasks[task_id] = {
             "task": result["task"],
             "created_at": datetime.now(),
             "thread_id": request.thread_id,
             "org_id": org_id
         }
+        logger.info(f"[{request_id}] Task stored in active_tasks")
         
         # Return streaming response with proper SSE headers
+        logger.info(f"[{request_id}] Starting streaming response...")
         return StreamingResponse(
             stream_task_updates(result["task"], task_id, request.thread_id),
             media_type="text/event-stream",
@@ -394,10 +434,12 @@ async def run_task(
             }
         )
             
-    except HTTPException:
+    except HTTPException as he:
+        logger.error(f"[{request_id}] HTTP Exception: {he.detail}")
         raise
     except Exception as e:
-        logger.error(f"Error running task: {e}")
+        logger.error(f"[{request_id}] Unexpected error: {e}")
+        logger.exception(f"[{request_id}] Full traceback:")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/api/v1/task/{task_id}/status", response_model=TaskStatusResponse)

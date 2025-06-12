@@ -282,8 +282,25 @@ const sendMessage = async () => {
 
   try {
     activeTasks.value++
+    const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+    console.log(`[${requestId}] === STARTING NEW TASK ===`)
+    console.log(`[${requestId}] Prompt:`, prompt)
+    console.log(`[${requestId}] Settings:`, {
+      backendUrl: settings.value.backendUrl,
+      orgId: settings.value.orgId ? settings.value.orgId.substring(0, 8) + '...' : 'None',
+      token: settings.value.token ? '***' + settings.value.token.slice(-4) : 'None',
+      apiBaseUrl: settings.value.apiBaseUrl
+    })
 
     // Initial request to start the task
+    console.log(`[${requestId}] Making request to:`, `${settings.value.backendUrl}/api/v1/run-task`)
+    const requestBody = {
+      prompt,
+      stream: true,
+      thread_id: currentThread.value.id
+    }
+    console.log(`[${requestId}] Request body:`, requestBody)
+    
     const response = await fetch(`${settings.value.backendUrl}/api/v1/run-task`, {
       method: 'POST',
       headers: {
@@ -292,19 +309,20 @@ const sendMessage = async () => {
         'X-API-Token': settings.value.token,
         'X-API-Base-URL': settings.value.apiBaseUrl || ''
       },
-      body: JSON.stringify({
-        prompt,
-        stream: true,
-        thread_id: currentThread.value.id
-      })
+      body: JSON.stringify(requestBody)
     })
 
+    console.log(`[${requestId}] Response status:`, response.status)
+    console.log(`[${requestId}] Response headers:`, Object.fromEntries(response.headers.entries()))
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      const errorText = await response.text()
+      console.error(`[${requestId}] HTTP error response:`, errorText)
+      throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`)
     }
 
     const data = await response.json()
-    console.log('Task started:', data)
+    console.log(`[${requestId}] Task started successfully:`, data)
 
     // Update AI message with task ID
     if (data.task_id) {
@@ -312,12 +330,16 @@ const sendMessage = async () => {
     }
 
     // Connect to SSE stream for updates
-    const eventSource = new EventSource(`${settings.value.backendUrl}/api/v1/task/${data.task_id}/stream`)
+    const streamUrl = `${settings.value.backendUrl}/api/v1/task/${data.task_id}/stream`
+    console.log(`[${requestId}] Connecting to stream:`, streamUrl)
+    const eventSource = new EventSource(streamUrl)
     
     eventSource.onmessage = (event) => {
       try {
+        console.log(`[${requestId}] Stream event received:`, event.data)
+        
         if (event.data === '[DONE]') {
-          console.log('Stream completed')
+          console.log(`[${requestId}] Stream completed`)
           clearTimeout(timeoutId)
           eventSource.close()
           activeTasks.value = Math.max(0, activeTasks.value - 1)
@@ -325,7 +347,7 @@ const sendMessage = async () => {
         }
 
         const parsed = JSON.parse(event.data)
-        console.log('Stream update:', parsed)
+        console.log(`[${requestId}] Stream update parsed:`, parsed)
 
         // Update step information based on current_step or status
         if (aiMessage.steps) {
@@ -434,7 +456,8 @@ const sendMessage = async () => {
     }, 300000) // 5 minutes
 
     eventSource.onerror = (error) => {
-      console.error('EventSource error:', error)
+      console.error(`[${requestId}] EventSource error:`, error)
+      console.error(`[${requestId}] EventSource readyState:`, eventSource.readyState)
       clearTimeout(timeoutId)
       eventSource.close()
       activeTasks.value = Math.max(0, activeTasks.value - 1)
@@ -458,7 +481,12 @@ const sendMessage = async () => {
     }
 
   } catch (error) {
-    console.error('Error:', error)
+    console.error(`[${requestId}] Critical error in sendMessage:`, error)
+    console.error(`[${requestId}] Error details:`, {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    })
     activeTasks.value = Math.max(0, activeTasks.value - 1)
     
     // Update AI message with error
