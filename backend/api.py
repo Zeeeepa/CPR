@@ -25,7 +25,10 @@ except ImportError:
     print("Warning: Codegen SDK not available. Install with: pip install codegen")
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Request/Response Models
@@ -146,9 +149,11 @@ class AgentCallback:
 async def monitor_task(task, callback: AgentCallback):
     """Monitor task status and trigger callbacks"""
     try:
+        logger.info(f"Starting to monitor task {callback.task_id}")
         while not callback.completed:
             task.refresh()
             status = task.status.lower() if task.status else "unknown"
+            logger.info(f"Task {callback.task_id} status: {status}")
             
             if status == "completed":
                 result = (
@@ -157,19 +162,22 @@ async def monitor_task(task, callback: AgentCallback):
                     getattr(task, 'output', None) or 
                     "Task completed successfully."
                 )
+                logger.info(f"Task {callback.task_id} completed with result")
                 await callback.on_status_change("completed", result=result)
                 break
             elif status == "failed":
                 error = getattr(task, 'error', None) or getattr(task, 'failure_reason', None) or 'Task failed'
+                logger.error(f"Task {callback.task_id} failed: {error}")
                 await callback.on_status_change("failed", error=error)
                 break
             elif status != "unknown":
+                logger.info(f"Task {callback.task_id} status update: {status}")
                 await callback.on_status_change(status)
             
             await asyncio.sleep(2)  # Poll every 2 seconds
             
     except Exception as e:
-        logger.error(f"Error monitoring task: {e}")
+        logger.error(f"Error monitoring task {callback.task_id}: {e}")
         await callback.on_status_change("error", error=str(e))
     finally:
         # Clean up
@@ -203,7 +211,7 @@ async def run_task(
         if not CODEGEN_AVAILABLE:
             raise HTTPException(status_code=500, detail="Codegen SDK not available")
         
-        logger.info(f"Running task for org_id: {org_id}, prompt length: {len(request.prompt)}")
+        logger.info(f"Running task for org_id: {org_id}, prompt: {request.prompt}")
         
         # Initialize agent
         kwargs = {"org_id": org_id, "token": token}
@@ -211,10 +219,12 @@ async def run_task(
             kwargs["base_url"] = base_url
         
         agent = Agent(**kwargs)
+        logger.info("Agent initialized successfully")
         
         # Run the task
         task = agent.run(prompt=request.prompt)
         task_id = str(task.id) if task.id else f"task_{datetime.now().timestamp()}"
+        logger.info(f"Created task with ID: {task_id}")
         
         # Create callback handler
         callback = AgentCallback(task_id, request.thread_id)
@@ -225,11 +235,14 @@ async def run_task(
             "callback": callback,
             "created_at": datetime.now()
         }
+        logger.info(f"Stored task {task_id} in active_tasks")
         
         # Start monitoring in background
         background_tasks.add_task(monitor_task, task, callback)
+        logger.info(f"Started monitoring task {task_id} in background")
         
         # Return streaming response
+        logger.info(f"Returning streaming response for task {task_id}")
         return StreamingResponse(
             callback.get_events(),
             media_type="text/event-stream",
@@ -263,4 +276,3 @@ if __name__ == "__main__":
         log_level=server_config.log_level,
         reload=True if os.getenv("ENVIRONMENT") == "development" else False
     )
-
