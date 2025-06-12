@@ -1,198 +1,116 @@
 <template>
-  <div class="flex h-screen bg-slate-950">
+  <div class="flex h-screen bg-gray-900 text-white">
     <!-- Sidebar -->
-    <div class="w-80 bg-slate-900 border-r border-slate-700 flex flex-col">
-      <!-- Header -->
-      <div class="p-4 border-b border-slate-700">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h1 class="text-xl font-bold text-white">Codegen AI</h1>
-            <p class="text-xs text-gray-400">Agent Dashboard</p>
-          </div>
-          <button
-            @click="showSettings = true"
-            class="p-2 text-gray-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-            title="Settings"
-          >
-            <CogIcon class="w-5 h-5" />
-          </button>
-        </div>
-        
-        <!-- New Thread Button -->
-        <button
-          @click="createNewThread"
-          class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 font-medium"
-        >
-          <PlusIcon class="w-4 h-4" />
-          New Thread
-        </button>
-      </div>
+    <div class="w-64 bg-gray-800 flex flex-col">
+      <!-- New Thread Button -->
+      <button
+        class="m-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center justify-center gap-2 transition-colors"
+        @click="createNewThread"
+      >
+        <PlusIcon class="w-5 h-5" />
+        <span>New Thread</span>
+      </button>
 
       <!-- Thread List -->
-      <div class="flex-1 overflow-y-auto scrollbar-thin">
-        <div class="p-2">
-          <div
-            v-for="thread in threads"
-            :key="thread.id"
-            @click="selectThread(thread.id)"
-            class="p-3 rounded-lg cursor-pointer transition-all mb-2 group relative"
-            :class="[
-              currentThreadId === thread.id
-                ? 'bg-blue-600 text-white shadow-lg'
-                : 'text-gray-300 hover:bg-slate-800'
-            ]"
+      <div class="flex-1 overflow-y-auto">
+        <div v-for="thread in threads" :key="thread.id" class="px-2">
+          <button
+            class="w-full p-3 rounded-lg text-left hover:bg-gray-700 transition-colors mb-1"
+            :class="{ 'bg-gray-700': currentThread?.id === thread.id }"
+            @click="selectThread(thread)"
           >
             <div class="flex items-center justify-between">
               <div class="flex-1 min-w-0">
                 <h3 class="font-medium truncate">{{ thread.name }}</h3>
                 <p class="text-sm opacity-70 truncate">
                   {{ thread.messages.length }} messages
-                  <span v-if="thread.lastActivity" class="ml-2">
-                    • {{ formatRelativeTime(thread.lastActivity) }}
-                  </span>
                 </p>
               </div>
               <button
-                v-if="threads.length > 1"
+                v-if="currentThread?.id === thread.id"
+                class="ml-2 p-1 text-gray-400 hover:text-white transition-colors"
                 @click.stop="deleteThread(thread.id)"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-600 rounded transition-all"
-                title="Delete thread"
               >
                 <TrashIcon class="w-4 h-4" />
               </button>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Connection Status -->
-      <div class="p-4 border-t border-slate-700">
-        <div class="flex items-center gap-3 text-sm">
-          <div
-            class="w-3 h-3 rounded-full"
-            :class="connectionStatus.connected ? 'bg-emerald-500' : 'bg-red-500'"
-          ></div>
-          <span :class="connectionStatus.connected ? 'text-emerald-400' : 'text-red-400'">
-            {{ connectionStatus.message }}
-          </span>
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- Main Chat Area -->
+    <!-- Main Content -->
     <div class="flex-1 flex flex-col">
-      <!-- Chat Header -->
-      <div class="p-4 border-b border-slate-700 bg-slate-900">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-lg font-semibold text-white">
-              {{ currentThread?.name || 'Select a thread' }}
-            </h2>
-            <p class="text-sm text-gray-400">
-              {{ currentThread ? `${currentThread.messages.length} messages` : 'No thread selected' }}
-            </p>
-          </div>
-          <div class="flex items-center gap-4">
-            <!-- Active tasks indicator -->
-            <div v-if="activeTasks > 0" class="flex items-center gap-2 text-sm text-blue-400">
-              <div class="animate-spin rounded-full h-4 w-4 border-2 border-blue-400 border-t-transparent"></div>
-              <span class="font-medium">{{ activeTasks }} active task{{ activeTasks > 1 ? 's' : '' }}</span>
-            </div>
-            
-            <!-- Connection indicator -->
-            <div class="flex items-center gap-2">
-              <div
-                class="w-2 h-2 rounded-full"
-                :class="connectionStatus.connected ? 'bg-emerald-500' : 'bg-red-500'"
-              ></div>
-              <span class="text-xs text-gray-400">
-                {{ connectionStatus.connected ? 'Connected' : 'Disconnected' }}
-              </span>
-            </div>
+      <!-- Header -->
+      <header class="p-4 border-b border-gray-700 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <h1 class="text-xl font-semibold">Agent Dashboard</h1>
+          <!-- Active tasks indicator -->
+          <div v-if="activeTasks > 0" class="flex items-center gap-2 text-sm text-blue-400">
+            <SpinnerIcon class="w-4 h-4 animate-spin" />
+            <span class="font-medium">{{ activeTasks }} active task{{ activeTasks > 1 ? 's' : '' }}</span>
           </div>
         </div>
-      </div>
-
-      <!-- Messages -->
-      <div
-        ref="messagesContainer"
-        class="flex-1 overflow-y-auto scrollbar-thin p-6"
-      >
-        <div v-if="!currentThread" class="flex items-center justify-center h-full">
-          <div class="text-center text-gray-400 max-w-md">
-            <div class="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-              <ChatBubbleLeftRightIcon class="w-8 h-8 text-gray-500" />
-            </div>
-            <h3 class="text-xl font-medium mb-3 text-white">Welcome to Codegen AI</h3>
-            <p class="mb-6 text-gray-400">Create a new thread to start chatting with AI agents and see real-time progress updates.</p>
-            <button
-              @click="createNewThread"
-              class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors font-medium"
-            >
-              Create New Thread
-            </button>
+        <div class="flex items-center gap-4">
+          <button
+            class="p-2 text-gray-400 hover:text-white transition-colors"
+            @click="toggleSettings"
+          >
+            <CogIcon class="w-5 h-5" />
+          </button>
+          <div class="flex items-center gap-2">
+            <span class="text-sm">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+            <div
+              class="w-2 h-2 rounded-full"
+              :class="connected ? 'bg-green-500' : 'bg-red-500'"
+            ></div>
           </div>
         </div>
+      </header>
 
-        <div v-else-if="currentThread.messages.length === 0" class="flex items-center justify-center h-full">
-          <div class="text-center text-gray-400 max-w-md">
-            <h3 class="text-lg font-medium mb-2 text-white">{{ currentThread.name }}</h3>
-            <p class="text-gray-400">Start a conversation by typing a message below. You'll see real-time progress as the AI agent processes your request.</p>
-          </div>
+      <!-- Messages Area -->
+      <div class="flex-1 overflow-y-auto p-4" ref="messagesContainer">
+        <div v-if="!currentThread" class="h-full flex flex-col items-center justify-center text-center">
+          <h2 class="text-2xl font-semibold mb-4">Welcome to Codegen AI</h2>
+          <p class="mb-6 text-gray-400">Create a new thread to start chatting with AI agents and see real-time progress updates.</p>
+          <button
+            class="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 transition-colors"
+            @click="createNewThread"
+          >
+            <PlusIcon class="w-5 h-5" />
+            <span>Start New Thread</span>
+          </button>
         </div>
-
-        <div v-else class="space-y-1">
-          <ChatMessage
-            v-for="message in currentThread.messages"
-            :key="message.id"
-            :message="message"
-            @copy="showNotification"
-          />
-        </div>
-
-        <!-- Loading indicator -->
-        <div
-          v-if="isLoading"
-          class="flex gap-3 justify-start mb-4"
-        >
-          <div class="bg-slate-800 text-gray-100 rounded-xl p-5 border border-slate-700 shadow-lg">
-            <div class="flex items-center gap-3">
-              <div class="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent"></div>
-              <span class="text-sm font-medium">AI is processing your request...</span>
-            </div>
-            <div class="mt-2 text-xs text-gray-400">
-              This may take a few moments depending on the complexity
-            </div>
+        <div v-else>
+          <div v-for="message in currentThread.messages" :key="message.id" class="mb-6">
+            <ChatMessage :message="message" />
           </div>
         </div>
       </div>
 
       <!-- Input Area -->
-      <div class="p-4 border-t border-slate-700 bg-slate-900">
-        <form @submit.prevent="sendMessage" class="flex gap-3">
-          <div class="flex-1 relative">
-            <textarea
-              v-model="newMessage"
-              @keydown.enter.exact.prevent="sendMessage"
-              @keydown.enter.shift.exact="newMessage += '\n'"
-              placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-              class="w-full bg-slate-800 text-white border border-slate-600 rounded-lg px-4 py-3 pr-16 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-colors"
-              rows="3"
-              :disabled="!currentThread || isLoading"
-            ></textarea>
-            <div class="absolute bottom-3 right-3 text-xs text-gray-500">
-              {{ newMessage.length }}/4000
-            </div>
-          </div>
+      <div class="p-4 border-t border-gray-700">
+        <div v-if="!currentThread" class="text-center text-gray-400">
+          <p>Start a conversation by typing a message below. You'll see real-time progress as the AI agent processes your request.</p>
+        </div>
+        <div class="flex gap-4">
+          <textarea
+            v-model="newMessage"
+            class="flex-1 bg-gray-800 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            rows="3"
+            placeholder="Type your message..."
+            @keydown.enter.exact.prevent="sendMessage"
+            @keydown.shift.enter.exact.prevent="newMessage += '\n'"
+          ></textarea>
           <button
-            type="submit"
-            :disabled="!newMessage.trim() || !currentThread || isLoading || newMessage.length > 4000"
-            class="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg transition-colors flex items-center gap-2 self-end font-medium"
+            class="px-6 bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="!newMessage.trim() || !currentThread"
+            @click="sendMessage"
           >
-            <PaperAirplaneIcon class="w-4 h-4" />
-            Send
+            <PaperAirplaneIcon class="w-5 h-5" />
+            <span>Send</span>
           </button>
-        </form>
+        </div>
       </div>
     </div>
 
@@ -203,96 +121,21 @@
       @close="showSettings = false"
       @save="saveSettings"
     />
-
-    <!-- Notification Toast -->
-    <div
-      v-if="notification.show"
-      class="fixed top-4 right-4 bg-slate-800 border text-white px-4 py-3 rounded-lg shadow-xl z-50 transition-all max-w-sm"
-      :class="notification.type === 'error' ? 'border-red-500 bg-red-950' : 'border-emerald-500 bg-emerald-950'"
-    >
-      <div class="flex items-center gap-2">
-        <CheckIcon v-if="notification.type !== 'error'" class="w-4 h-4 text-emerald-400" />
-        <XMarkIcon v-else class="w-4 h-4 text-red-400" />
-        <span class="text-sm">{{ notification.message }}</span>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch, onUnmounted } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import {
   PlusIcon,
   CogIcon,
   TrashIcon,
   PaperAirplaneIcon,
-  ChatBubbleLeftRightIcon,
-  CheckIcon,
-  XMarkIcon
-} from '@heroicons/vue/24/outline'
-
-// Reactive state
-const threads = ref([])
-const currentThreadId = ref(null)
-const newMessage = ref('')
-const isLoading = ref(false)
-const showSettings = ref(false)
-const messagesContainer = ref(null)
-const activeTasks = ref(0)
-const notification = ref({ show: false, message: '', type: 'info' })
-
-// Connection status
-const connectionStatus = ref({
-  connected: false,
-  message: 'Disconnected',
-  lastCheck: null
-})
-
-// Settings
-const settings = ref({
-  backendUrl: process.env.BACKEND_URL || 'http://localhost:8887',
-  orgId: '',
-  token: '',
-  apiBaseUrl: ''
-})
-
-// Computed
-const currentThread = computed(() => 
-  threads.value.find(t => t.id === currentThreadId.value)
-)
-
-// Methods
-const createNewThread = () => {
-  const threadName = prompt('Enter thread name:') || `Thread ${threads.value.length + 1}`
-  const newThread = {
-    id: uuidv4(),
-    name: threadName,
-    messages: [],
-    createdAt: new Date(),
-    lastActivity: new Date()
-  }
-  threads.value.unshift(newThread)
-  selectThread(newThread.id)
-  saveToLocalStorage()
-}
-
-const selectThread = (threadId) => {
-  currentThreadId.value = threadId
-  nextTick(() => {
-    scrollToBottom()
-  })
-}
-
-const deleteThread = (threadId) => {
-  if (confirm('Are you sure you want to delete this thread?')) {
-    threads.value = threads.value.filter(t => t.id !== threadId)
-    if (currentThreadId.value === threadId) {
-      currentThreadId.value = threads.value[0]?.id || null
-    }
-    saveToLocalStorage()
-  }
-}
+  SpinnerIcon
+} from '@heroicons/vue/outline'
+import ChatMessage from '~/components/ChatMessage.vue'
+import SettingsModal from '~/components/SettingsModal.vue'
 
 interface Thread {
   id: string;
@@ -317,14 +160,90 @@ interface Message {
   error?: boolean;
 }
 
-const messages = ref<Message[]>([])
-const newMessage = ref('')
-const activeTasks = ref(0)
+// State
+const threads = ref<Thread[]>([])
 const currentThread = ref<Thread | null>(null)
-const threadId = ref<string | null>(null)
+const newMessage = ref('')
+const showSettings = ref(false)
+const connected = ref(true)
+const activeTasks = ref(0)
+const messagesContainer = ref<HTMLElement | null>(null)
+
+// Settings
+const settings = ref({
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:8887',
+  orgId: '',
+  token: '',
+  apiBaseUrl: ''
+})
+
+// Load settings from localStorage
+onMounted(() => {
+  const savedSettings = localStorage.getItem('settings')
+  if (savedSettings) {
+    settings.value = JSON.parse(savedSettings)
+  }
+
+  const savedThreads = localStorage.getItem('threads')
+  if (savedThreads) {
+    threads.value = JSON.parse(savedThreads)
+    // Convert date strings back to Date objects
+    threads.value.forEach(thread => {
+      thread.lastActivity = new Date(thread.lastActivity)
+    })
+  }
+})
+
+// Methods
+const scrollToBottom = () => {
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  }
+}
+
+const saveSettings = (newSettings: typeof settings.value) => {
+  settings.value = newSettings
+  localStorage.setItem('settings', JSON.stringify(newSettings))
+  showSettings.value = false
+}
+
+const saveToLocalStorage = () => {
+  localStorage.setItem('threads', JSON.stringify(threads.value))
+}
+
+const createNewThread = () => {
+  const newThread: Thread = {
+    id: uuidv4(),
+    name: `Thread ${threads.value.length + 1}`,
+    messages: [],
+    lastActivity: new Date()
+  }
+  threads.value.push(newThread)
+  currentThread.value = newThread
+  saveToLocalStorage()
+}
+
+const selectThread = (thread: Thread) => {
+  currentThread.value = thread
+}
+
+const deleteThread = (threadId: string) => {
+  const index = threads.value.findIndex(t => t.id === threadId)
+  if (index !== -1) {
+    threads.value.splice(index, 1)
+    if (currentThread.value?.id === threadId) {
+      currentThread.value = threads.value[0] || null
+    }
+    saveToLocalStorage()
+  }
+}
+
+const toggleSettings = () => {
+  showSettings.value = !showSettings.value
+}
 
 const sendMessage = async () => {
-  if (!newMessage.value.trim()) return
+  if (!newMessage.value.trim() || !currentThread.value) return
 
   // Add user message
   const userMessage: Message = {
@@ -333,7 +252,8 @@ const sendMessage = async () => {
     content: newMessage.value.trim(),
     sent: true
   }
-  messages.value.push(userMessage)
+  currentThread.value.messages.push(userMessage)
+  currentThread.value.lastActivity = new Date()
 
   const prompt = newMessage.value.trim()
   newMessage.value = ''
@@ -353,7 +273,9 @@ const sendMessage = async () => {
     taskId: null,
     webUrl: null
   }
-  messages.value.push(aiMessage)
+  currentThread.value.messages.push(aiMessage)
+  saveToLocalStorage()
+  scrollToBottom()
 
   try {
     activeTasks.value++
@@ -370,7 +292,7 @@ const sendMessage = async () => {
       body: JSON.stringify({
         prompt,
         stream: true,
-        thread_id: threadId.value
+        thread_id: currentThread.value.id
       })
     })
 
@@ -437,6 +359,8 @@ const sendMessage = async () => {
           if (aiMessage.steps) {
             aiMessage.steps.forEach(step => step.status = 'completed')
           }
+          currentThread.value!.lastActivity = new Date()
+          saveToLocalStorage()
         }
         // Handle errors
         else if (parsed.status === 'failed' || parsed.status === 'error') {
@@ -451,7 +375,11 @@ const sendMessage = async () => {
               }
             })
           }
+          currentThread.value!.lastActivity = new Date()
+          saveToLocalStorage()
         }
+
+        scrollToBottom()
       } catch (e) {
         console.error('Error processing stream message:', e)
       }
@@ -475,6 +403,8 @@ const sendMessage = async () => {
             }
           })
         }
+        currentThread.value!.lastActivity = new Date()
+        saveToLocalStorage()
       }
     }
 
@@ -490,138 +420,16 @@ const sendMessage = async () => {
     if (aiMessage.steps) {
       aiMessage.steps.forEach(step => step.status = 'failed')
     }
-  }
-}
-
-const formatRelativeTime = (timestamp) => {
-  const now = new Date()
-  const time = new Date(timestamp)
-  const diffMs = now - time
-  const diffMins = Math.floor(diffMs / 60000)
-  const diffHours = Math.floor(diffMs / 3600000)
-  const diffDays = Math.floor(diffMs / 86400000)
-
-  if (diffMins < 1) return 'now'
-  if (diffMins < 60) return `${diffMins}m ago`
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays < 7) return `${diffDays}d ago`
-  return time.toLocaleDateString()
-}
-
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-    }
-  })
-}
-
-const saveSettings = (newSettings) => {
-  settings.value = { ...newSettings }
-  localStorage.setItem('codegen-settings', JSON.stringify(settings.value))
-  showSettings.value = false
-  checkConnection()
-  showNotification('Settings saved successfully!')
-}
-
-const checkConnection = async () => {
-  try {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 5000)
-    
-    const response = await fetch(`${settings.value.backendUrl}/api/v1/health`, {
-      signal: controller.signal
-    })
-    
-    clearTimeout(timeoutId)
-    
-    if (response.ok) {
-      const data = await response.json()
-      connectionStatus.value = {
-        connected: true,
-        message: data.codegen_available ? 'Connected' : 'Connected (Codegen SDK unavailable)',
-        lastCheck: new Date()
-      }
-    } else {
-      throw new Error(`HTTP ${response.status}`)
-    }
-  } catch (error) {
-    connectionStatus.value = {
-      connected: false,
-      message: error.name === 'AbortError' ? 'Connection timeout' : 'Connection failed',
-      lastCheck: new Date()
-    }
-  }
-}
-
-const showNotification = (message, type = 'info') => {
-  notification.value = { show: true, message, type }
-  setTimeout(() => {
-    notification.value.show = false
-  }, 3000)
-}
-
-const saveToLocalStorage = () => {
-  localStorage.setItem('codegen-threads', JSON.stringify(threads.value))
-  localStorage.setItem('codegen-current-thread', currentThreadId.value)
-}
-
-const loadFromLocalStorage = () => {
-  const savedThreads = localStorage.getItem('codegen-threads')
-  const savedCurrentThread = localStorage.getItem('codegen-current-thread')
-  const savedSettings = localStorage.getItem('codegen-settings')
-
-  if (savedThreads) {
-    threads.value = JSON.parse(savedThreads)
-  }
-
-  if (savedCurrentThread && threads.value.find(t => t.id === savedCurrentThread)) {
-    currentThreadId.value = savedCurrentThread
-  } else if (threads.value.length > 0) {
-    currentThreadId.value = threads.value[0].id
-  }
-
-  if (savedSettings) {
-    settings.value = { ...settings.value, ...JSON.parse(savedSettings) }
-  }
-}
-
-// Connection check interval
-let connectionInterval = null
-
-// Lifecycle
-onMounted(() => {
-  loadFromLocalStorage()
-  checkConnection()
-  
-  // Check connection periodically
-  connectionInterval = setInterval(checkConnection, 30000)
-  
-  // Create default thread if none exist
-  if (threads.value.length === 0) {
-    const defaultThread = {
-      id: uuidv4(),
-      name: 'General Chat',
-      messages: [],
-      createdAt: new Date(),
-      lastActivity: new Date()
-    }
-    threads.value.push(defaultThread)
-    currentThreadId.value = defaultThread.id
+    currentThread.value!.lastActivity = new Date()
     saveToLocalStorage()
   }
-})
+}
 
-onUnmounted(() => {
-  if (connectionInterval) {
-    clearInterval(connectionInterval)
-  }
-})
-
-// Watch for thread changes
+// Watch for thread changes to scroll to bottom
 watch(currentThread, () => {
-  if (currentThread.value) {
-    threadId.value = currentThread.value.id
-  }
-}, { immediate: true })
+  nextTick(() => {
+    scrollToBottom()
+  })
+}, { deep: true })
 </script>
+
