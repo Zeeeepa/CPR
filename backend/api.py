@@ -208,9 +208,9 @@ def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] 
 async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Stream task status updates to the client with enhanced error handling"""
     try:
-        max_retries = 120  # 10 minutes with 5-second intervals
+        max_retries = 900  # 30 minutes with 2-second intervals
         retry_count = 0
-        last_status = None
+        last_step = None
         
         while retry_count < max_retries:
             try:
@@ -218,132 +218,112 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                 task.refresh()
                 current_status = task.status.lower() if task.status else "unknown"
                 
-                # Only send update if status changed or it's the first update
-                if current_status != last_status or retry_count == 0:
-                    update_data = {
-                        "status": current_status,
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "retry_count": retry_count
-                    }
-                    
-                    if thread_id:
-                        update_data["thread_id"] = thread_id
-                    
-                    if hasattr(task, 'web_url') and task.web_url:
-                        update_data["web_url"] = task.web_url
-                    
-                    yield f"data: {json.dumps(update_data)}\n\n"
-                    last_status = current_status
+                # Extract step information
+                current_step = None
+                try:
+                    # Try to get step information from task.result or task.summary
+                    if hasattr(task, 'result') and isinstance(task.result, dict):
+                        current_step = task.result.get('current_step')
+                    elif hasattr(task, 'summary') and isinstance(task.summary, dict):
+                        current_step = task.summary.get('current_step')
+                except Exception as e:
+                    logger.warning(f"Could not extract step info: {e}")
+                
+                # Prepare update data
+                update_data = {
+                    "status": current_status,
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                if thread_id:
+                    update_data["thread_id"] = thread_id
+                
+                if hasattr(task, 'web_url') and task.web_url:
+                    update_data["web_url"] = task.web_url
+                
+                # Only send step update if it has changed
+                if current_step and current_step != last_step:
+                    update_data["current_step"] = current_step
+                    last_step = current_step
                 
                 # Check if task is complete
                 if current_status == "completed":
-                    result_content = (
-                        getattr(task, 'result', None) or 
-                        getattr(task, 'summary', None) or 
-                        getattr(task, 'output', None) or 
+                    result = (
+                        getattr(task, 'result', None) or
+                        getattr(task, 'summary', None) or
+                        getattr(task, 'output', None) or
                         (f"Task completed successfully. View details at: {task.web_url}" if hasattr(task, 'web_url') else None) or
                         "Task completed successfully."
                     )
                     
-                    result_data = {
-                        "status": "completed",
-                        "result": result_content,
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "web_url": getattr(task, 'web_url', None)
-                    }
+                    # Send completion event
+                    yield f"data: {json.dumps({
+                        'status': 'completed',
+                        'task_id': task_id,
+                        'result': result,
+                        'web_url': getattr(task, 'web_url', None)
+                    })}\\n\\n"
                     
-                    if thread_id:
-                        result_data["thread_id"] = thread_id
-                    
-                    yield f"data: {json.dumps(result_data)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    # Send done event
+                    yield "data: [DONE]\\n\\n"
                     break
                     
                 elif current_status == "failed":
                     error_msg = getattr(task, 'error', None) or getattr(task, 'failure_reason', None) or 'Task failed with unknown error'
-                    error_data = {
-                        "status": "failed",
-                        "error": error_msg,
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "web_url": getattr(task, 'web_url', None)
-                    }
                     
-                    if thread_id:
-                        error_data["thread_id"] = thread_id
+                    # Send failure event
+                    yield f"data: {json.dumps({
+                        'status': 'failed',
+                        'task_id': task_id,
+                        'error': error_msg,
+                        'web_url': getattr(task, 'web_url', None)
+                    })}\\n\\n"
                     
-                    yield f"data: {json.dumps(error_data)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    # Send done event
+                    yield "data: [DONE]\\n\\n"
                     break
                     
-                elif current_status in ["pending", "active", "running", "queued", "in_progress"]:
-                    await asyncio.sleep(5)
-                    retry_count += 1
-                else:
-                    logger.warning(f"Unknown task status: {current_status} for task {task_id}")
-                    await asyncio.sleep(5)
-                    retry_count += 1
-                    
+                elif current_status != "unknown":
+                    # Send status update
+                    yield f"data: {json.dumps(update_data)}\\n\\n"
+                
+                # Send heartbeat every 5 seconds to keep connection alive
+                yield ": heartbeat\\n\\n"
+                
+                # Wait before next update
+                await asyncio.sleep(2)
+                retry_count += 1
+                
             except Exception as e:
                 logger.error(f"Error refreshing task {task_id}: {e}")
-                error_data = {
-                    "status": "error",
-                    "error": f"Failed to refresh task: {str(e)}",
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat()
-                }
-                yield f"data: {json.dumps(error_data)}\n\n"
-                await asyncio.sleep(5)
-                retry_count += 1
+                # Send error event
+                yield f"data: {json.dumps({
+                    'status': 'error',
+                    'error': f"Failed to refresh task: {str(e)}",
+                    'task_id': task_id,
+                })}\\n\\n"
+                break
         
-        # Timeout handling
+        # Handle timeout
         if retry_count >= max_retries:
-            try:
-                task.refresh()
-                if task.status and task.status.lower() == "completed":
-                    result_content = (
-                        getattr(task, 'result', None) or 
-                        getattr(task, 'summary', None) or 
-                        f"Task completed. View at: {getattr(task, 'web_url', 'N/A')}"
-                    )
-                    final_data = {
-                        "status": "completed",
-                        "result": result_content,
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "web_url": getattr(task, 'web_url', None)
-                    }
-                else:
-                    final_data = {
-                        "status": "timeout",
-                        "error": f"Task timed out after {max_retries * 5} seconds",
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat()
-                    }
-            except Exception as e:
-                final_data = {
-                    "status": "error",
-                    "error": f"Final refresh failed: {str(e)}",
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat()
-                }
-            
-            yield f"data: {json.dumps(final_data)}\n\n"
-            yield "data: [DONE]\n\n"
+            logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds")
+            yield f"data: {json.dumps({
+                'status': 'failed',
+                'error': f"Task timed out after {max_retries * 2} seconds",
+                'task_id': task_id,
+            })}\\n\\n"
             
     except Exception as e:
-        final_error = {
-            "status": "error",
-            "error": f"Stream error: {str(e)}",
-            "task_id": task_id,
-            "timestamp": datetime.now().isoformat()
-        }
-        yield f"data: {json.dumps(final_error)}\n\n"
-        yield "data: [DONE]\n\n"
+        logger.error(f"Stream error for task {task_id}: {e}")
+        yield f"data: {json.dumps({
+            'status': 'error',
+            'error': str(e),
+            'task_id': task_id,
+        })}\\n\\n"
+        
     finally:
-        # Clean up
+        # Clean up task
         active_tasks.pop(task_id, None)
         logger.info(f"Cleaned up task {task_id}")
 
@@ -569,4 +549,3 @@ if __name__ == "__main__":
         log_level=server_config.log_level,
         reload=True if os.getenv("ENVIRONMENT") == "development" else False
     )
-
