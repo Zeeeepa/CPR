@@ -133,7 +133,7 @@ import {
   TrashIcon,
   PaperAirplaneIcon,
   SpinnerIcon
-} from '@heroicons/vue/outline'
+} from '@heroicons/vue/24/outline'
 import ChatMessage from '~/components/ChatMessage.vue'
 import SettingsModal from '~/components/SettingsModal.vue'
 
