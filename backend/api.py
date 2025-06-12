@@ -135,21 +135,33 @@ class AgentCallback:
 
     async def get_events(self):
         """Get events from the queue"""
-        while not self.completed or not self.queue.empty():
-            try:
-                event = await self.queue.get()
-                yield event
-            except Exception as e:
-                logger.error(f"Error getting events: {e}")
-                yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
-                yield "data: [DONE]\n\n"
-                break
+        try:
+            while not self.completed or not self.queue.empty():
+                try:
+                    # Use timeout to prevent infinite waiting
+                    event = await asyncio.wait_for(self.queue.get(), timeout=5.0)
+                    yield event
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield ": heartbeat\n\n"
+                except Exception as e:
+                    logger.error(f"Error getting events: {e}")
+                    yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    break
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
 
 async def monitor_task(task, callback: AgentCallback):
     """Monitor task status and trigger callbacks"""
     try:
         logger.info(f"Starting to monitor task {callback.task_id}")
-        while not callback.completed:
+        max_retries = 60  # 2 minutes with 2-second intervals
+        retry_count = 0
+        
+        while not callback.completed and retry_count < max_retries:
             task.refresh()
             status = task.status.lower() if task.status else "unknown"
             logger.info(f"Task {callback.task_id} status: {status}")
@@ -174,6 +186,11 @@ async def monitor_task(task, callback: AgentCallback):
                 await callback.on_status_change(status)
             
             await asyncio.sleep(2)  # Poll every 2 seconds
+            retry_count += 1
+            
+        if retry_count >= max_retries:
+            logger.error(f"Task {callback.task_id} timed out after {max_retries * 2} seconds")
+            await callback.on_status_change("failed", error="Task timed out")
             
     except Exception as e:
         logger.error(f"Error monitoring task {callback.task_id}: {e}")
