@@ -21,13 +21,13 @@ async def test_actual_endpoints():
     print("🚀 Starting server...")
     server_process = subprocess.Popen([
         "python", "-m", "uvicorn", "api:app", 
-        "--host", "127.0.0.1", "--port", "8887"
+        "--host", "127.0.0.1", "--port", "8002"
     ], cwd=".", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     # Wait for server to start
     time.sleep(5)
     
-    base_url = "http://127.0.0.1:8887"
+    base_url = "http://127.0.0.1:8002"
     
     try:
         # Test 1: Health Check
@@ -230,4 +230,3 @@ if __name__ == "__main__":
     else:
         print("❌ ACTUAL ENDPOINTS TESTING FAILED")
         sys.exit(1)
-

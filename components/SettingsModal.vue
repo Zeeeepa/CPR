@@ -51,7 +51,7 @@
           <input
             v-model="localSettings.backendUrl"
             type="url"
-            placeholder="http://localhost:8887"
+            placeholder="http://localhost:8002"
             class="w-full bg-slate-700 text-white border border-slate-600 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
             required
           />

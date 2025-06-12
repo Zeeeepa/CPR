@@ -27,7 +27,7 @@ async def test_frontend_integration():
     # Start server in background
     server_process = subprocess.Popen([
         "python", "-m", "uvicorn", "api:app", 
-        "--host", "0.0.0.0", "--port", "8887"
+        "--host", "0.0.0.0", "--port", "8002"
     ], cwd=".", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     
     # Wait for server to start
@@ -35,7 +35,7 @@ async def test_frontend_integration():
     
     try:
         async with aiohttp.ClientSession() as session:
-            base_url = "http://localhost:8887"
+            base_url = "http://localhost:8002"
             
             # Test 1: Health check
             print(f"\n{'='*60}")
@@ -219,4 +219,3 @@ if __name__ == "__main__":
     else:
         print("❌ FRONTEND INTEGRATION TESTING FAILED")
         sys.exit(1)
-
