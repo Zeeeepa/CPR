@@ -17,7 +17,7 @@ import uvicorn
 
 # Import the official Codegen SDK
 try:
-    from codegen import Agent
+    from codegen.agents.agent import Agent
     CODEGEN_AVAILABLE = True
 except ImportError:
     CODEGEN_AVAILABLE = False
@@ -104,33 +104,91 @@ app.add_middleware(
 # Initialize default Codegen configuration
 default_codegen_config = get_codegen_config()
 
-# Store active tasks and agents (in production, use Redis or database)
-active_tasks: Dict[str, Any] = {}
-agent_instances: Dict[str, Agent] = {}
+# Enhanced Agent Client for better error handling and status tracking
+class AgentClient:
+    def __init__(self, org_id: str, token: str, base_url: Optional[str] = None):
+        if not CODEGEN_AVAILABLE:
+            raise ImportError("Codegen SDK not available. Install with: pip install codegen")
+        
+        kwargs = {"org_id": org_id, "token": token}
+        if base_url:
+            kwargs["base_url"] = base_url
+            
+        self.agent = Agent(**kwargs)
+        
+    async def process_message(self, message: str, stream: bool = True) -> Dict[str, Any]:
+        """Process a message with proper error handling and status tracking"""
+        try:
+            # Run the agent with the message
+            task = self.agent.run(prompt=message)
+            task_id = str(task.id) if task.id else f"task_{datetime.now().timestamp()}"
+            
+            if not stream:
+                # For non-streaming, wait for completion
+                max_retries = 60  # 5 minutes with 5-second intervals
+                for _ in range(max_retries):
+                    task.refresh()
+                    status = task.status.lower() if task.status else "unknown"
+                    
+                    if status == "completed":
+                        return {
+                            "status": "completed",
+                            "result": getattr(task, 'result', None),
+                            "task_id": task_id,
+                            "web_url": getattr(task, 'web_url', None)
+                        }
+                    elif status == "failed":
+                        return {
+                            "status": "failed",
+                            "error": getattr(task, 'error', "Unknown error"),
+                            "task_id": task_id
+                        }
+                    
+                    await asyncio.sleep(5)
+                
+                return {
+                    "status": "timeout",
+                    "error": "Task timed out",
+                    "task_id": task_id
+                }
+            
+            return {
+                "status": "initiated",
+                "task": task,
+                "task_id": task_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "task_id": None
+            }
 
-def get_or_create_agent(org_id: str, token: str, base_url: Optional[str] = None) -> Agent:
-    """Get or create a Codegen agent instance"""
+# Store active tasks and agent clients
+active_tasks: Dict[str, Any] = {}
+agent_clients: Dict[str, AgentClient] = {}
+
+def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] = None) -> AgentClient:
+    """Get or create an AgentClient instance"""
     if not CODEGEN_AVAILABLE:
         raise HTTPException(status_code=500, detail="Codegen SDK not available")
     
-    agent_key = f"{org_id}:{token}"
+    client_key = f"{org_id}:{token}"
     
-    if agent_key not in agent_instances:
+    if client_key not in agent_clients:
         try:
-            kwargs = {"org_id": org_id, "token": token}
-            if base_url:
-                kwargs["base_url"] = base_url
-            
-            agent_instances[agent_key] = Agent(**kwargs)
-            logger.info(f"Created new agent instance for org_id: {org_id}")
+            agent_clients[client_key] = AgentClient(org_id, token, base_url)
+            logger.info(f"Created new agent client for org_id: {org_id}")
         except Exception as e:
-            logger.error(f"Failed to create agent: {e}")
-            raise HTTPException(status_code=400, detail=f"Failed to create agent: {str(e)}")
+            logger.error(f"Failed to create agent client: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to create agent client: {str(e)}")
     
-    return agent_instances[agent_key]
+    return agent_clients[client_key]
 
 async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = None):
-    """Stream task status updates to the client"""
+    """Stream task status updates to the client with enhanced error handling"""
     try:
         max_retries = 120  # 10 minutes with 5-second intervals
         retry_count = 0
@@ -154,7 +212,6 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                     if thread_id:
                         update_data["thread_id"] = thread_id
                     
-                    # Include web_url if available
                     if hasattr(task, 'web_url') and task.web_url:
                         update_data["web_url"] = task.web_url
                     
@@ -163,28 +220,13 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                 
                 # Check if task is complete
                 if current_status == "completed":
-                    # Try multiple ways to get the result
-                    result_content = None
-                    
-                    # Method 1: Direct result attribute
-                    if hasattr(task, 'result') and task.result:
-                        result_content = task.result
-                    
-                    # Method 2: Check if there's a summary or output attribute
-                    elif hasattr(task, 'summary') and task.summary:
-                        result_content = task.summary
-                    
-                    # Method 3: Check for output attribute
-                    elif hasattr(task, 'output') and task.output:
-                        result_content = task.output
-                    
-                    # Method 4: Use web_url as fallback with message
-                    elif hasattr(task, 'web_url') and task.web_url:
-                        result_content = f"Task completed successfully. View details at: {task.web_url}"
-                    
-                    # Method 5: Generic completion message
-                    else:
-                        result_content = "Task completed successfully."
+                    result_content = (
+                        getattr(task, 'result', None) or 
+                        getattr(task, 'summary', None) or 
+                        getattr(task, 'output', None) or 
+                        (f"Task completed successfully. View details at: {task.web_url}" if hasattr(task, 'web_url') else None) or
+                        "Task completed successfully."
+                    )
                     
                     result_data = {
                         "status": "completed",
@@ -219,11 +261,9 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                     break
                     
                 elif current_status in ["pending", "active", "running", "queued", "in_progress"]:
-                    # Continue polling
                     await asyncio.sleep(5)
                     retry_count += 1
                 else:
-                    # Unknown status, continue polling but log it
                     logger.warning(f"Unknown task status: {current_status} for task {task_id}")
                     await asyncio.sleep(5)
                     retry_count += 1
@@ -242,11 +282,14 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
         
         # Timeout handling
         if retry_count >= max_retries:
-            # Before timing out, try one final refresh to get the result
             try:
                 task.refresh()
                 if task.status and task.status.lower() == "completed":
-                    result_content = getattr(task, 'result', None) or getattr(task, 'summary', None) or f"Task completed. View at: {getattr(task, 'web_url', 'N/A')}"
+                    result_content = (
+                        getattr(task, 'result', None) or 
+                        getattr(task, 'summary', None) or 
+                        f"Task completed. View at: {getattr(task, 'web_url', 'N/A')}"
+                    )
                     final_data = {
                         "status": "completed",
                         "result": result_content,
@@ -254,27 +297,28 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                         "timestamp": datetime.now().isoformat(),
                         "web_url": getattr(task, 'web_url', None)
                     }
-                    yield f"data: {json.dumps(final_data)}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
+                else:
+                    final_data = {
+                        "status": "timeout",
+                        "error": f"Task timed out after {max_retries * 5} seconds",
+                        "task_id": task_id,
+                        "timestamp": datetime.now().isoformat()
+                    }
             except Exception as e:
-                logger.error(f"Final refresh attempt failed for task {task_id}: {e}")
+                final_data = {
+                    "status": "error",
+                    "error": f"Final refresh failed: {str(e)}",
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat()
+                }
             
-            timeout_data = {
-                "status": "timeout",
-                "error": "Task polling timeout after 10 minutes. Task may still be running.",
-                "task_id": task_id,
-                "timestamp": datetime.now().isoformat(),
-                "web_url": getattr(task, 'web_url', None)
-            }
-            yield f"data: {json.dumps(timeout_data)}\n\n"
+            yield f"data: {json.dumps(final_data)}\n\n"
             yield "data: [DONE]\n\n"
             
     except Exception as e:
-        logger.error(f"Error in streaming task {task_id}: {e}")
         final_error = {
             "status": "error",
-            "error": f"Streaming error: {str(e)}",
+            "error": f"Stream error: {str(e)}",
             "task_id": task_id,
             "timestamp": datetime.now().isoformat()
         }
@@ -311,66 +355,44 @@ async def run_task(
         
         logger.info(f"Running task for org_id: {org_id}, prompt length: {len(request.prompt)}")
         
-        # Get or create agent instance
-        agent = get_or_create_agent(org_id, token, base_url)
+        # Get or create agent client
+        agent_client = get_or_create_agent_client(org_id, token, base_url)
         
-        # Run the task using official SDK
-        task = agent.run(prompt=request.prompt)
-        task_id = str(task.id) if task.id else f"task_{datetime.now().timestamp()}"
+        # Process the message
+        result = await agent_client.process_message(request.prompt, stream=request.stream)
         
-        logger.info(f"Created task with ID: {task_id}, Status: {task.status}")
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        if not request.stream:
+            # Return direct response for non-streaming
+            return TaskResponse(
+                result=result.get("result"),
+                status=result["status"],
+                task_id=result["task_id"],
+                web_url=result.get("web_url"),
+                thread_id=request.thread_id
+            )
         
         # Store task for status tracking
+        task_id = result["task_id"]
         active_tasks[task_id] = {
-            "task": task,
+            "task": result["task"],
             "created_at": datetime.now(),
             "thread_id": request.thread_id,
             "org_id": org_id
         }
         
-        if request.stream:
-            # Return streaming response
-            return StreamingResponse(
-                stream_task_updates(task, task_id, request.thread_id),
-                media_type="text/plain",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"  # Disable nginx buffering
-                }
-            )
-        else:
-            # For non-streaming, wait for completion with timeout
-            max_wait_time = 300  # 5 minutes
-            poll_interval = 5
-            elapsed_time = 0
-            
-            while elapsed_time < max_wait_time:
-                await asyncio.sleep(poll_interval)
-                task.refresh()
-                status = task.status.lower() if task.status else "unknown"
-                elapsed_time += poll_interval
-                
-                logger.debug(f"Task {task_id} status: {status} (elapsed: {elapsed_time}s)")
-                
-                if status == "completed":
-                    result = getattr(task, 'result', 'Task completed successfully.')
-                    return TaskResponse(
-                        result=result,
-                        status=status,
-                        task_id=task_id,
-                        web_url=getattr(task, 'web_url', None),
-                        thread_id=request.thread_id
-                    )
-                elif status == "failed":
-                    error_msg = getattr(task, 'error', 'Task failed with unknown error')
-                    raise HTTPException(status_code=500, detail=f"Task failed: {error_msg}")
-            
-            # Timeout for non-streaming
-            raise HTTPException(
-                status_code=408, 
-                detail=f"Task timeout after {max_wait_time} seconds - task may still be running"
-            )
+        # Return streaming response
+        return StreamingResponse(
+            stream_task_updates(result["task"], task_id, request.thread_id),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
             
     except HTTPException:
         raise
@@ -515,7 +537,7 @@ async def get_config():
             "cors_origins": server_config.cors_origins
         },
         "active_tasks_count": len(active_tasks),
-        "agent_instances_count": len(agent_instances)
+        "agent_clients_count": len(agent_clients)
     }
 
 # Startup event
@@ -534,7 +556,7 @@ async def shutdown_event():
     logger.info("Shutting down Codegen AI Chat Dashboard API")
     # Clean up active tasks and agents
     active_tasks.clear()
-    agent_instances.clear()
+    agent_clients.clear()
 
 if __name__ == "__main__":
     server_config = get_server_config()
@@ -545,3 +567,4 @@ if __name__ == "__main__":
         log_level=server_config.log_level,
         reload=True if os.getenv("ENVIRONMENT") == "development" else False
     )
+
