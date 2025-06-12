@@ -1,0 +1,172 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+@import 'highlight.js/styles/github-dark.css';
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  
+  body {
+    @apply bg-slate-950 text-gray-100 font-sans antialiased;
+  }
+}
+
+@layer components {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #475569 #1e293b;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-slate-800;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-slate-600 rounded-full;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-500;
+  }
+
+  /* Progress indicators */
+  .progress-step {
+    @apply flex items-center gap-3 p-3 rounded-lg border transition-all duration-300;
+  }
+
+  .progress-step.pending {
+    @apply bg-amber-950/30 border-amber-700/50 text-amber-200;
+  }
+
+  .progress-step.active {
+    @apply bg-blue-950/30 border-blue-700/50 text-blue-200;
+  }
+
+  .progress-step.completed {
+    @apply bg-emerald-950/30 border-emerald-700/50 text-emerald-200;
+  }
+
+  .progress-step.failed {
+    @apply bg-red-950/30 border-red-700/50 text-red-200;
+  }
+
+  /* Status badges */
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-badge.pending {
+    @apply bg-amber-900/50 text-amber-300 border border-amber-700/50;
+  }
+
+  .status-badge.running {
+    @apply bg-blue-900/50 text-blue-300 border border-blue-700/50;
+  }
+
+  .status-badge.completed {
+    @apply bg-emerald-900/50 text-emerald-300 border border-emerald-700/50;
+  }
+
+  .status-badge.failed {
+    @apply bg-red-900/50 text-red-300 border border-red-700/50;
+  }
+
+  /* Pulse animation for active states */
+  .pulse-dot {
+    @apply w-2 h-2 rounded-full animate-pulse;
+  }
+
+  .pulse-dot.pending {
+    @apply bg-amber-400;
+  }
+
+  .pulse-dot.running {
+    @apply bg-blue-400;
+  }
+
+  .pulse-dot.completed {
+    @apply bg-emerald-400;
+  }
+
+  .pulse-dot.failed {
+    @apply bg-red-400;
+  }
+}
+
+/* Custom markdown styles */
+.markdown-content {
+  @apply text-gray-200 leading-relaxed;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  @apply text-white font-semibold mb-4 mt-6;
+}
+
+.markdown-content h1 { @apply text-2xl; }
+.markdown-content h2 { @apply text-xl; }
+.markdown-content h3 { @apply text-lg; }
+
+.markdown-content p {
+  @apply mb-4;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  @apply mb-4 pl-6;
+}
+
+.markdown-content li {
+  @apply mb-2;
+}
+
+.markdown-content ul li {
+  @apply list-disc;
+}
+
+.markdown-content ol li {
+  @apply list-decimal;
+}
+
+.markdown-content blockquote {
+  @apply border-l-4 border-blue-500 pl-4 italic text-gray-300 my-4;
+}
+
+.markdown-content code {
+  @apply bg-slate-800 text-blue-300 px-1 py-0.5 rounded text-sm font-mono;
+}
+
+.markdown-content pre {
+  @apply bg-slate-900 rounded-lg p-4 overflow-x-auto my-4 relative border border-slate-700;
+}
+
+.markdown-content pre code {
+  @apply bg-transparent text-gray-200 p-0;
+}
+
+.markdown-content a {
+  @apply text-blue-400 hover:text-blue-300 underline;
+}
+
+.markdown-content table {
+  @apply w-full border-collapse border border-slate-600 my-4;
+}
+
+.markdown-content th,
+.markdown-content td {
+  @apply border border-slate-600 px-4 py-2;
+}
+
+.markdown-content th {
+  @apply bg-slate-800 font-semibold;
+}
