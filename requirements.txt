@@ -1,0 +1,6 @@
+fastapi>=0.115.2
+uvicorn>=0.27.1
+codegen
+python-multipart
+pydantic>=2.0.0
+

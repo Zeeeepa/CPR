@@ -9,7 +9,7 @@ import os
 import json
 from datetime import datetime
 from typing import Optional, Dict, Any, AsyncGenerator
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -539,6 +539,161 @@ async def get_config():
         "active_tasks_count": len(active_tasks),
         "agent_clients_count": len(agent_clients)
     }
+
+@app.get("/api/v1/task/{task_id}/stream")
+async def stream_task_events(
+    task_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks
+) -> StreamingResponse:
+    """Stream task events using Server-Sent Events (SSE)"""
+    try:
+        if task_id not in active_tasks:
+            raise HTTPException(status_code=404, detail="Task not found")
+            
+        task_info = active_tasks[task_id]
+        task = task_info["task"]
+        
+        async def event_generator():
+            try:
+                max_retries = 900  # 30 minutes with 2-second intervals
+                retry_count = 0
+                last_step = None
+                
+                while retry_count < max_retries:
+                    try:
+                        # Check if client disconnected
+                        if await request.is_disconnected():
+                            logger.info(f"Client disconnected from task {task_id} stream")
+                            break
+                            
+                        # Refresh task status
+                        task.refresh()
+                        current_status = task.status.lower() if task.status else "unknown"
+                        logger.info(f"Task {task_id} status: {current_status}")
+                        
+                        # Extract step information
+                        current_step = None
+                        try:
+                            # Try to get step information from task.result or task.summary
+                            if hasattr(task, 'result') and isinstance(task.result, dict):
+                                current_step = task.result.get('current_step')
+                            elif hasattr(task, 'summary') and isinstance(task.summary, dict):
+                                current_step = task.summary.get('current_step')
+                        except Exception as e:
+                            logger.warning(f"Could not extract step info: {e}")
+                        
+                        # Prepare update data
+                        update_data = {
+                            "status": current_status,
+                            "task_id": task_id,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                        if hasattr(task, 'web_url') and task.web_url:
+                            update_data["web_url"] = task.web_url
+                        
+                        # Only send step update if it has changed
+                        if current_step and current_step != last_step:
+                            update_data["current_step"] = current_step
+                            last_step = current_step
+                            logger.info(f"Task {task_id} step: {current_step}")
+                        
+                        # Check if task is complete
+                        if current_status == "completed":
+                            result = (
+                                getattr(task, 'result', None) or
+                                getattr(task, 'summary', None) or
+                                getattr(task, 'output', None) or
+                                (f"Task completed successfully. View details at: {task.web_url}" if hasattr(task, 'web_url') else None) or
+                                "Task completed successfully."
+                            )
+                            logger.info(f"Task {task_id} completed with result")
+                            
+                            # Send completion event
+                            yield f"data: {json.dumps({
+                                'status': 'completed',
+                                'task_id': task_id,
+                                'result': result,
+                                'web_url': getattr(task, 'web_url', None)
+                            })}\\n\\n"
+                            
+                            # Send done event
+                            yield "data: [DONE]\\n\\n"
+                            break
+                            
+                        elif current_status == "failed":
+                            error_msg = getattr(task, 'error', None) or getattr(task, 'failure_reason', None) or 'Task failed with unknown error'
+                            logger.error(f"Task {task_id} failed: {error_msg}")
+                            
+                            # Send failure event
+                            yield f"data: {json.dumps({
+                                'status': 'failed',
+                                'task_id': task_id,
+                                'error': error_msg,
+                                'web_url': getattr(task, 'web_url', None)
+                            })}\\n\\n"
+                            
+                            # Send done event
+                            yield "data: [DONE]\\n\\n"
+                            break
+                            
+                        elif current_status != "unknown":
+                            # Send status update
+                            yield f"data: {json.dumps(update_data)}\\n\\n"
+                        
+                        # Send heartbeat every 5 seconds to keep connection alive
+                        yield ": heartbeat\\n\\n"
+                        
+                        # Wait before next update
+                        await asyncio.sleep(2)
+                        retry_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error refreshing task {task_id}: {e}")
+                        # Send error event
+                        yield f"data: {json.dumps({
+                            'status': 'error',
+                            'error': f"Failed to refresh task: {str(e)}",
+                            'task_id': task_id,
+                        })}\\n\\n"
+                        break
+                
+                # Handle timeout
+                if retry_count >= max_retries:
+                    logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds")
+                    yield f"data: {json.dumps({
+                        'status': 'failed',
+                        'error': f"Task timed out after {max_retries * 2} seconds",
+                        'task_id': task_id,
+                    })}\\n\\n"
+                    
+            except Exception as e:
+                logger.error(f"Stream error for task {task_id}: {e}")
+                yield f"data: {json.dumps({
+                    'status': 'error',
+                    'error': str(e),
+                    'task_id': task_id,
+                })}\\n\\n"
+                
+            finally:
+                # Clean up task
+                active_tasks.pop(task_id, None)
+                logger.info(f"Cleaned up task {task_id}")
+        
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable proxy buffering
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error setting up stream for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     server_config = get_server_config()
