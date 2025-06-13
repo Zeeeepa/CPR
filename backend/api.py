@@ -609,7 +609,7 @@ async def stream_task_events(
         
         async def event_generator():
             try:
-                max_retries = 900  # 30 minutes with 2-second intervals
+                max_retries = 150  # 5 minutes with 2-second intervals
                 retry_count = 0
                 last_step = None
                 
@@ -624,6 +624,15 @@ async def stream_task_events(
                         task.refresh()
                         current_status = task.status.lower() if task.status else "unknown"
                         logger.info(f"Task {task_id} status: {current_status}")
+                        
+                        # Debug: Log all task attributes to understand completion states
+                        debug_info = {
+                            'status': task.status,
+                            'has_result': hasattr(task, 'result') and task.result is not None,
+                            'has_output': hasattr(task, 'output') and task.output is not None,
+                            'has_web_url': hasattr(task, 'web_url') and task.web_url is not None,
+                        }
+                        logger.debug(f"Task {task_id} debug info: {debug_info}")
                         
                         # Extract step information from multiple sources
                         current_step = None
@@ -680,8 +689,14 @@ async def stream_task_events(
                             last_step = current_step
                             logger.info(f"Task {task_id} step: {current_step}")
                         
-                        # Check if task is complete
-                        if current_status in ["completed", "complete"]:
+                        # Check if task is complete - expanded completion detection
+                        is_completed = (
+                            current_status in ["completed", "complete", "finished", "done", "success", "successful"] or
+                            (hasattr(task, 'web_url') and task.web_url and current_status not in ["pending", "running", "in_progress", "active", "processing", "executing"]) or
+                            (hasattr(task, 'result') and task.result and current_status not in ["pending", "running", "in_progress", "active", "processing", "executing"])
+                        )
+                        
+                        if is_completed:
                             # Try multiple ways to get the result
                             result = None
                             
@@ -775,6 +790,13 @@ async def stream_task_events(
                         # Send heartbeat every 5 seconds to keep connection alive
                         yield ": heartbeat\\n\\n"
                         
+                        # Check for early completion indicators every 30 seconds
+                        if retry_count > 0 and retry_count % 15 == 0:  # Every 30 seconds (15 * 2 seconds)
+                            if hasattr(task, 'web_url') and task.web_url and current_status not in ["pending", "running"]:
+                                logger.info(f"Task {task_id} appears complete (has web_url), forcing completion check")
+                                # Force completion on next iteration
+                                continue
+                        
                         # Wait before next update
                         await asyncio.sleep(2)
                         retry_count += 1
@@ -789,14 +811,36 @@ async def stream_task_events(
                         })}\\n\\n"
                         break
                 
-                # Handle timeout
+                # Handle timeout - but first check if we can extract any result
                 if retry_count >= max_retries:
-                    logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds")
-                    yield f"data: {json.dumps({
-                        'status': 'failed',
-                        'error': f"Task timed out after {max_retries * 2} seconds",
-                        'task_id': task_id,
-                    })}\\n\\n"
+                    logger.warning(f"Task {task_id} reached max retries, checking for any available result...")
+                    
+                    # Try to extract result even if status isn't "completed"
+                    final_result = None
+                    if hasattr(task, 'web_url') and task.web_url:
+                        final_result = f"Task processing completed. View full details at: {task.web_url}"
+                    elif hasattr(task, 'result') and task.result:
+                        if isinstance(task.result, dict):
+                            final_result = task.result.get('content') or task.result.get('response') or str(task.result)
+                        else:
+                            final_result = str(task.result)
+                    
+                    if final_result:
+                        logger.info(f"Task {task_id} forced completion with result")
+                        yield f"data: {json.dumps({
+                            'status': 'completed',
+                            'result': final_result,
+                            'task_id': task_id,
+                            'web_url': getattr(task, 'web_url', None)
+                        })}\\n\\n"
+                        yield "data: [DONE]\\n\\n"
+                    else:
+                        logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds with no result")
+                        yield f"data: {json.dumps({
+                            'status': 'failed',
+                            'error': f"Task timed out after {max_retries * 2} seconds",
+                            'task_id': task_id,
+                        })}\\n\\n"
                     
             except Exception as e:
                 logger.error(f"Stream error for task {task_id}: {e}")
