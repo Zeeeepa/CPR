@@ -68,10 +68,18 @@ class ServerConfig(BaseModel):
 
 def get_codegen_config() -> CodegenConfig:
     """Get Codegen configuration from environment variables"""
+    org_id = os.getenv("CODEGEN_ORG_ID")
+    token = os.getenv("CODEGEN_TOKEN")
+    
+    if not org_id:
+        raise ValueError("CODEGEN_ORG_ID environment variable is required")
+    if not token:
+        raise ValueError("CODEGEN_TOKEN environment variable is required")
+    
     return CodegenConfig(
-        org_id=os.getenv("CODEGEN_ORG_ID", "323"),
-        token=os.getenv("CODEGEN_TOKEN", "sk-ce027fa7-3c8d-4beb-8c86-ed8ae982ac99"),
-        base_url=os.getenv("CODEGEN_BASE_URL")
+        org_id=org_id,
+        token=token,
+        base_url=os.getenv("CODEGEN_BASE_URL", "https://codegen-sh-rest-api.modal.run")
     )
 
 def get_server_config() -> ServerConfig:
@@ -524,6 +532,51 @@ async def health_check():
         version="2.0.0",
         timestamp=datetime.now().isoformat()
     )
+
+@app.post("/api/v1/test-connection")
+async def test_connection():
+    """Test connection to Codegen API"""
+    try:
+        if not CODEGEN_AVAILABLE:
+            raise HTTPException(status_code=500, detail="Codegen SDK not available")
+        
+        # Try to get configuration
+        try:
+            config = get_codegen_config()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Try to create an agent and test connection
+        try:
+            agent = Agent(
+                org_id=config.org_id,
+                token=config.token,
+                base_url=config.base_url
+            )
+            
+            # Test with a simple status check - this will validate credentials
+            status = agent.get_status()
+            
+            return {
+                "status": "connected",
+                "message": "Successfully connected to Codegen API",
+                "org_id": config.org_id,
+                "base_url": config.base_url,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Connection test failed: {e}")
+            raise HTTPException(
+                status_code=401, 
+                detail=f"Failed to connect to Codegen API: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in connection test: {e}")
+        raise HTTPException(status_code=500, detail=f"Connection test error: {str(e)}")
 
 @app.get("/api/v1/config")
 async def get_config():
