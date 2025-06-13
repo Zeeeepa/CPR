@@ -59,10 +59,12 @@
             <CogIcon class="w-5 h-5" />
           </button>
           <div class="flex items-center gap-2">
-            <span class="text-sm">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+            <span class="text-sm">
+              {{ connectionTesting ? 'Testing...' : (connected ? 'Connected' : 'Disconnected') }}
+            </span>
             <div
               class="w-2 h-2 rounded-full"
-              :class="connected ? 'bg-green-500' : 'bg-red-500'"
+              :class="connectionTesting ? 'bg-yellow-500 animate-pulse' : (connected ? 'bg-green-500' : 'bg-red-500')"
             ></div>
           </div>
         </div>
@@ -166,7 +168,8 @@ const threads = ref<Thread[]>([])
 const currentThread = ref<Thread | null>(null)
 const newMessage = ref('')
 const showSettings = ref(false)
-const connected = ref(true)
+const connected = ref(false)
+const connectionTesting = ref(false)
 const activeTasks = ref(0)
 const messagesContainer = ref<HTMLElement | null>(null)
 
@@ -193,7 +196,42 @@ onMounted(() => {
       thread.lastActivity = new Date(thread.lastActivity)
     })
   }
+  
+  // Test connection on startup
+  testConnection()
 })
+
+// Test connection to backend and Codegen API
+const testConnection = async () => {
+  if (connectionTesting.value) return
+  
+  connectionTesting.value = true
+  connected.value = false
+  
+  try {
+    const response = await fetch(`${settings.value.backendUrl}/api/v1/test-connection`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+    
+    if (response.ok) {
+      const data = await response.json()
+      console.log('Connection test successful:', data)
+      connected.value = true
+    } else {
+      const error = await response.text()
+      console.error('Connection test failed:', error)
+      connected.value = false
+    }
+  } catch (error) {
+    console.error('Connection test error:', error)
+    connected.value = false
+  } finally {
+    connectionTesting.value = false
+  }
+}
 
 // Methods
 const scrollToBottom = () => {
@@ -206,6 +244,8 @@ const saveSettings = (newSettings: typeof settings.value) => {
   settings.value = newSettings
   localStorage.setItem('settings', JSON.stringify(newSettings))
   showSettings.value = false
+  // Test connection after saving settings
+  testConnection()
 }
 
 const saveToLocalStorage = () => {
@@ -268,10 +308,7 @@ const sendMessage = async () => {
     sent: false,
     timestamp: Date.now() + 1,
     steps: [
-      { id: 1, title: 'Initializing Agent', description: 'Setting up the AI agent', status: 'active' },
-      { id: 2, title: 'Processing Request', description: 'Analyzing your prompt', status: 'pending' },
-      { id: 3, title: 'Generating Response', description: 'Creating the response', status: 'pending' },
-      { id: 4, title: 'Finalizing', description: 'Completing the task', status: 'pending' }
+      { id: 1, title: 'Starting Task', description: 'Initializing Codegen agent...', status: 'active' }
     ],
     taskId: null,
     webUrl: null
@@ -328,43 +365,34 @@ const sendMessage = async () => {
         console.log('Stream update:', parsed)
 
         // Update step information based on current_step or status
-        if (aiMessage.steps) {
-          if (parsed.current_step) {
-            // Map current_step to our step progression
-            let currentStepIndex = -1
-            const stepLower = parsed.current_step.toLowerCase()
+        if (aiMessage.steps && parsed.current_step) {
+          // Add new step if we have step information
+          const stepExists = aiMessage.steps.some(step => 
+            step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
+            step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
+          )
+          
+          if (!stepExists) {
+            // Mark previous steps as completed
+            aiMessage.steps.forEach(step => {
+              if (step.status === 'active') {
+                step.status = 'completed'
+              }
+            })
             
-            if (stepLower.includes('initializing') || stepLower.includes('setup')) {
-              currentStepIndex = 0
-            } else if (stepLower.includes('processing') || stepLower.includes('analyzing')) {
-              currentStepIndex = 1
-            } else if (stepLower.includes('generating') || stepLower.includes('creating')) {
-              currentStepIndex = 2
-            } else if (stepLower.includes('finalizing') || stepLower.includes('completing')) {
-              currentStepIndex = 3
-            }
-            
-            if (currentStepIndex >= 0) {
-              // Mark previous steps as completed
-              for (let i = 0; i <= currentStepIndex; i++) {
-                if (aiMessage.steps[i]) {
-                  aiMessage.steps[i].status = 'completed'
-                }
-              }
-              // Set next step as active if available
-              if (currentStepIndex < aiMessage.steps.length - 1 && aiMessage.steps[currentStepIndex + 1]) {
-                aiMessage.steps[currentStepIndex + 1].status = 'active'
-              }
-            }
-          } else if (parsed.status === 'running' || parsed.status === 'active') {
-            // If no specific step but task is running, progress through steps
-            const completedSteps = aiMessage.steps.filter(s => s.status === 'completed').length
-            if (completedSteps < aiMessage.steps.length - 1) {
-              const nextStepIndex = completedSteps
-              if (aiMessage.steps[nextStepIndex] && aiMessage.steps[nextStepIndex].status !== 'active') {
-                aiMessage.steps[nextStepIndex].status = 'active'
-              }
-            }
+            // Add new step
+            aiMessage.steps.push({
+              id: aiMessage.steps.length + 1,
+              title: parsed.current_step,
+              description: `Processing: ${parsed.current_step}`,
+              status: 'active'
+            })
+          }
+        } else if (aiMessage.steps && (parsed.status === 'running' || parsed.status === 'in_progress')) {
+          // Update description of active step
+          const activeStep = aiMessage.steps.find(step => step.status === 'active')
+          if (activeStep) {
+            activeStep.description = `Status: ${parsed.status}`
           }
         }
 
