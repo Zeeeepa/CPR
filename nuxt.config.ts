@@ -11,6 +11,7 @@ export default defineNuxtConfig({
   },
   ssr: false,
   devServer: {
+    host: 'localhost',
     port: 3001
   },
   tailwindcss: {
