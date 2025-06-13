@@ -502,7 +502,13 @@ const sendMessage = async () => {
     // Add polling fallback in case SSE fails
     const pollTaskStatus = async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`)
+        const response = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
+          headers: {
+            'X-Org-ID': settings.value.codegenOrgId,
+            'X-Token': settings.value.codegenToken,
+            'X-Base-URL': settings.value.apiBaseUrl || ''
+          }
+        })
         if (response.ok) {
           const status = await response.json()
           console.log('Polling status:', status)
@@ -527,9 +533,16 @@ const sendMessage = async () => {
             clearTimeout(timeoutId)
             clearInterval(pollInterval)
           }
+        } else {
+          console.error('Status polling failed:', response.status, response.statusText)
+          // If we get 404, the task might not be stored properly
+          if (response.status === 404) {
+            console.error('Task not found - possible backend storage issue')
+          }
         }
       } catch (error) {
         console.error('Polling error:', error)
+        // Don't spam errors, but log them for debugging
       }
     }
     
