@@ -15,6 +15,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import the official Codegen SDK
 try:
@@ -256,7 +260,7 @@ async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = Non
                     last_step = current_step
                 
                 # Check if task is complete
-                if current_status == "completed":
+                if current_status in ["completed", "complete"]:
                     result = (
                         getattr(task, 'result', None) or
                         getattr(task, 'summary', None) or
