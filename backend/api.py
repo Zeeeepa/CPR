@@ -48,7 +48,7 @@ class TaskResponse(BaseModel):
 class TaskStatusResponse(BaseModel):
     status: str = Field(..., description="Current task status")
     result: Optional[str] = Field(None, description="Task result if completed")
-    task_id: str = Field(..., description="Task identifier")
+    task_id: Optional[str] = Field(None, description="Task identifier")
     web_url: Optional[str] = Field(None, description="Web URL for the task")
     progress: Optional[Dict[str, Any]] = Field(None, description="Progress information")
 

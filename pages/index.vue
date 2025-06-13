@@ -333,7 +333,7 @@ const sendMessage = async () => {
       },
       body: JSON.stringify({
         prompt,
-        stream: true,
+        stream: false,  // Use non-streaming for reliable task creation
         thread_id: currentThread.value.id
       })
     })
@@ -533,8 +533,9 @@ const sendMessage = async () => {
       }
     }
     
-    // Poll every 10 seconds as fallback
-    const pollInterval = setInterval(pollTaskStatus, 10000)
+    // Start polling immediately, then every 3 seconds for responsive updates
+    pollTaskStatus() // First poll immediately
+    const pollInterval = setInterval(pollTaskStatus, 3000)
     
     // Add timeout to prevent infinite spinning
     const timeoutId = setTimeout(() => {
