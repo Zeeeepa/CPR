@@ -374,6 +374,15 @@ async def run_task(
         if result["status"] == "error":
             raise HTTPException(status_code=500, detail=result["error"])
         
+        # Store task for status tracking (needed for both streaming and non-streaming)
+        task_id = result["task_id"]
+        active_tasks[task_id] = {
+            "task": result["task"],
+            "created_at": datetime.now(),
+            "thread_id": request.thread_id,
+            "org_id": org_id
+        }
+        
         if not request.stream:
             # Return direct response for non-streaming
             return TaskResponse(
@@ -383,15 +392,6 @@ async def run_task(
                 web_url=result.get("web_url"),
                 thread_id=request.thread_id
             )
-        
-        # Store task for status tracking
-        task_id = result["task_id"]
-        active_tasks[task_id] = {
-            "task": result["task"],
-            "created_at": datetime.now(),
-            "thread_id": request.thread_id,
-            "org_id": org_id
-        }
         
         # Return streaming response with proper SSE headers
         return StreamingResponse(
