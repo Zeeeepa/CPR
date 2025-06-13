@@ -365,34 +365,55 @@ const sendMessage = async () => {
         console.log('Stream update:', parsed)
 
         // Update step information based on current_step or status
-        if (aiMessage.steps && parsed.current_step) {
-          // Add new step if we have step information
-          const stepExists = aiMessage.steps.some(step => 
-            step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
-            step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
-          )
-          
-          if (!stepExists) {
-            // Mark previous steps as completed
-            aiMessage.steps.forEach(step => {
-              if (step.status === 'active') {
-                step.status = 'completed'
-              }
-            })
+        if (aiMessage.steps) {
+          if (parsed.current_step) {
+            // Check if this step already exists
+            const stepExists = aiMessage.steps.some(step => 
+              step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
+              step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
+            )
             
-            // Add new step
-            aiMessage.steps.push({
-              id: aiMessage.steps.length + 1,
-              title: parsed.current_step,
-              description: `Processing: ${parsed.current_step}`,
-              status: 'active'
-            })
-          }
-        } else if (aiMessage.steps && (parsed.status === 'running' || parsed.status === 'in_progress')) {
-          // Update description of active step
-          const activeStep = aiMessage.steps.find(step => step.status === 'active')
-          if (activeStep) {
-            activeStep.description = `Status: ${parsed.status}`
+            if (!stepExists) {
+              // Mark previous steps as completed
+              aiMessage.steps.forEach(step => {
+                if (step.status === 'active') {
+                  step.status = 'completed'
+                }
+              })
+              
+              // Add new step
+              aiMessage.steps.push({
+                id: aiMessage.steps.length + 1,
+                title: parsed.current_step,
+                description: `Processing: ${parsed.current_step}`,
+                status: 'active'
+              })
+              
+              console.log('Added new step:', parsed.current_step)
+            } else {
+              // Update existing step description
+              const existingStep = aiMessage.steps.find(step => 
+                step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
+                step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
+              )
+              if (existingStep && existingStep.status !== 'completed') {
+                existingStep.status = 'active'
+                existingStep.description = `Processing: ${parsed.current_step}`
+              }
+            }
+          } else if (parsed.status && ['running', 'in_progress', 'active', 'processing'].includes(parsed.status)) {
+            // Update description of active step with status
+            const activeStep = aiMessage.steps.find(step => step.status === 'active')
+            if (activeStep) {
+              activeStep.description = `Status: ${parsed.status}`
+            } else {
+              // No active step, mark first pending as active
+              const pendingStep = aiMessage.steps.find(step => step.status === 'pending')
+              if (pendingStep) {
+                pendingStep.status = 'active'
+                pendingStep.description = `Status: ${parsed.status}`
+              }
+            }
           }
         }
 
@@ -406,14 +427,41 @@ const sendMessage = async () => {
 
         // Handle completion
         if (parsed.status === 'completed') {
-          aiMessage.content = parsed.result || 'Task completed successfully.'
+          // Ensure we have actual response text
+          let finalResponse = parsed.result || 'Task completed successfully.'
+          
+          // If the result looks like a generic message, try to get more details
+          if (finalResponse === 'Task completed successfully.' && parsed.web_url) {
+            finalResponse = `Task completed successfully. View full details at: ${parsed.web_url}`
+          }
+          
+          aiMessage.content = finalResponse
           aiMessage.sent = true
-          // Mark all steps as completed
+          
+          // Mark all steps as completed and add final step
           if (aiMessage.steps) {
             aiMessage.steps.forEach(step => step.status = 'completed')
+            
+            // Add completion step if not already present
+            const hasCompletionStep = aiMessage.steps.some(step => 
+              step.title.toLowerCase().includes('completed') || 
+              step.title.toLowerCase().includes('finished')
+            )
+            
+            if (!hasCompletionStep) {
+              aiMessage.steps.push({
+                id: aiMessage.steps.length + 1,
+                title: 'Task Completed',
+                description: 'Response generated successfully',
+                status: 'completed'
+              })
+            }
           }
+          
           currentThread.value!.lastActivity = new Date()
           saveToLocalStorage()
+          
+          console.log('Task completed with response:', finalResponse)
         }
         // Handle errors
         else if (parsed.status === 'failed' || parsed.status === 'error') {
