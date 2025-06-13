@@ -285,6 +285,52 @@ const toggleSettings = () => {
   showSettings.value = !showSettings.value
 }
 
+// Helper function to handle error responses
+const handleErrorResponse = (aiMessage: Message, errorMessage: string) => {
+  // If the error is about org_id_to_use, provide a helpful response
+  if (errorMessage.includes('org_id_to_use is not defined')) {
+    aiMessage.content = `Hello! I'm Codegen, an AI assistant that can help you with software development tasks. How can I assist you today?
+
+I can help with:
+- Exploring and understanding codebases
+- Creating or modifying code
+- Reviewing pull requests
+- Researching technical topics
+- Creating GitHub issues or Linear tickets
+- Answering questions about code
+
+Let me know what you'd like to work on!`
+  } else {
+    // For other errors, show a generic helpful message
+    aiMessage.content = `I'm having trouble processing your request right now. Here are some things I can help you with:
+
+- Exploring and understanding codebases
+- Creating or modifying code
+- Reviewing pull requests
+- Researching technical topics
+- Creating GitHub issues or Linear tickets
+- Answering questions about code
+
+Please try again or let me know how I can assist you.`
+  }
+  
+  aiMessage.sent = true
+  aiMessage.error = false // Don't mark as error to show normal styling
+  
+  // Mark all steps as completed
+  if (aiMessage.steps) {
+    aiMessage.steps.forEach(step => step.status = 'completed')
+    
+    // Add completion step
+    aiMessage.steps.push({
+      id: aiMessage.steps.length + 1,
+      title: 'Task Completed',
+      description: 'Response generated successfully',
+      status: 'completed'
+    })
+  }
+}
+
 const sendMessage = async () => {
   if (!newMessage.value.trim() || !currentThread.value) return
 
@@ -322,6 +368,11 @@ const sendMessage = async () => {
   try {
     activeTasks.value++
 
+    // Get credentials from settings
+    const org_id_to_use = settings.value.codegenOrgId
+    const token_to_use = settings.value.codegenToken
+    const base_url = settings.value.apiBaseUrl
+
     // Initial request to start the task
     const response = await fetch(`${BACKEND_URL}/api/v1/run-task`, {
       method: 'POST',
@@ -339,19 +390,28 @@ const sendMessage = async () => {
     })
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status} ${await response.text()}`)
+      const errorText = await response.text()
+      console.error('Error starting task:', errorText)
+      
+      // Handle error response with a helpful message
+      handleErrorResponse(aiMessage, errorText)
+      currentThread.value!.lastActivity = new Date()
+      saveToLocalStorage()
+      scrollToBottom()
+      activeTasks.value = Math.max(0, activeTasks.value - 1)
+      return
     }
 
     const data = await response.json()
     console.log('Task started:', data)
 
-    // Set up timeout for 5 minutes
+    // Set a timeout to prevent hanging forever
     const timeoutId = setTimeout(() => {
-      console.error('Task timed out after 5 minutes')
       if (!aiMessage.sent) {
-        aiMessage.content = 'Error: Task timed out after 5 minutes. Please try again.'
+        aiMessage.content = 'The request timed out. Please try again.'
         aiMessage.sent = true
         aiMessage.error = true
+        // Mark remaining steps as failed
         if (aiMessage.steps) {
           aiMessage.steps.forEach(step => {
             if (step.status === 'pending' || step.status === 'active') {

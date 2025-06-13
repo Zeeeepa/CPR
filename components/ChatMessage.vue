@@ -179,6 +179,16 @@ const renderMarkdown = (content) => {
   if (!content) return ''
   
   try {
+    // Check if content is an error message and handle it specially
+    if (content.startsWith('Error:')) {
+      // For error messages, we'll still render them as markdown but with special styling
+      const sanitizedContent = content
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+      
+      return `<div class="error-message">${marked(sanitizedContent)}</div>`
+    }
+    
     // Sanitize content to prevent XSS
     const sanitizedContent = content
       .replace(/</g, '&lt;')
@@ -252,4 +262,10 @@ const copyMessage = async () => {
 .progress-step.failed {
   @apply text-red-400 bg-red-900/20;
 }
+
+/* Add styles for error messages */
+:deep(.error-message) {
+  @apply text-gray-100;
+}
 </style>
+
