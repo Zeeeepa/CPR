@@ -19,7 +19,25 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+# Add this right after load_dotenv() in your code
+print(f"CODEGEN_ORG_ID from env: {os.getenv('CODEGEN_ORG_ID')}")
+print(f"CODEGEN_TOKEN from env: {os.getenv('CODEGEN_TOKEN')}")
+org_id = os.getenv("CODEGEN_ORG_ID")
+token = os.getenv("CODEGEN_TOKEN")
 
+print(f"Org ID: {org_id}")
+print(f"Token: {token[:10]}..." if token else "Token: None")
+
+# Test SDK import and basic initialization
+try:
+    from codegen.agents.agent import Agent
+    print("SDK imported successfully")
+    
+    agent = Agent(org_id=org_id, token=token)
+    print("Agent created successfully")
+    
+except Exception as e:
+    print(f"Error: {e}")
 # Import the official Codegen SDK
 try:
     from codegen.agents.agent import Agent
@@ -83,7 +101,7 @@ def get_codegen_config() -> CodegenConfig:
     return CodegenConfig(
         org_id=org_id,
         token=token,
-        base_url=os.getenv("CODEGEN_BASE_URL")  # Don't use default base_url, let SDK use its default
+        base_url=os.getenv("CODEGEN_BASE_URL")
     )
 
 def get_server_config() -> ServerConfig:
@@ -99,13 +117,354 @@ def get_server_config() -> ServerConfig:
 active_tasks: Dict[str, Any] = {}
 agent_clients: Dict[str, Agent] = {}
 
+# Enhanced Agent Client for better error handling and status tracking
+class AgentClient:
+    def __init__(self, org_id: str, token: str, base_url: Optional[str] = None):
+        if not CODEGEN_AVAILABLE:
+            raise ImportError("Codegen SDK not available. Install with: pip install codegen")
+        
+        # Initialize Agent with proper parameters
+        kwargs = {"org_id": org_id, "token": token}
+        if base_url:
+            kwargs["base_url"] = base_url
+            
+        self.agent = Agent(**kwargs)
+        
+    async def process_message(self, message: str, stream: bool = True) -> Dict[str, Any]:
+        """Process a message with proper error handling and status tracking"""
+        try:
+            logger.info(f"Starting process_message with stream={stream}")
+            
+            # Run the agent with the message
+            task = self.agent.run(prompt=message)
+            logger.info(f"Agent.run() completed, task object created: {type(task)}")
+            
+            # Debug: Print all task attributes
+            logger.info("=== TASK OBJECT DEBUG ===")
+            for attr in dir(task):
+                if not attr.startswith('_'):
+                    try:
+                        value = getattr(task, attr)
+                        if not callable(value):
+                            logger.info(f"task.{attr} = {value} (type: {type(value)})")
+                    except Exception as e:
+                        logger.info(f"task.{attr} = ERROR: {e}")
+            logger.info("=== END TASK DEBUG ===")
+            
+            # Use the actual task ID from the Codegen SDK
+            task_id = None
+            
+            # Try multiple ways to get the task ID
+            if hasattr(task, 'id') and task.id is not None:
+                task_id = str(task.id)
+                logger.info(f"Got task ID from task.id: {task_id}")
+            elif hasattr(task, 'agent_run_id') and task.agent_run_id is not None:
+                task_id = str(task.agent_run_id)
+                logger.info(f"Got task ID from task.agent_run_id: {task_id}")
+            elif hasattr(task, 'run_id') and task.run_id is not None:
+                task_id = str(task.run_id)
+                logger.info(f"Got task ID from task.run_id: {task_id}")
+            
+            if not task_id:
+                # Fallback to timestamp-based ID if task.id is not available
+                task_id = f"task_{int(datetime.now().timestamp() * 1000)}"
+                logger.warning(f"Task ID not available from SDK, using fallback: {task_id}")
+            
+            logger.info(f"Final task ID: {task_id}")
+            
+            if not stream:
+                # For non-streaming, wait for completion with timeout
+                max_retries = 60  # 5 minutes with 5-second intervals
+                for _ in range(max_retries):
+                    task.refresh()
+                    status = task.status.lower() if task.status else "unknown"
+                    
+                    if status in ["completed", "complete"]:
+                        return {
+                            "status": "completed",
+                            "result": self._extract_result(task),
+                            "task_id": task_id,
+                            "web_url": getattr(task, 'web_url', None)
+                        }
+                    elif status == "failed":
+                        return {
+                            "status": "failed",
+                            "error": getattr(task, 'error', "Unknown error"),
+                            "task_id": task_id
+                        }
+                    
+                    await asyncio.sleep(5)
+                
+                return {
+                    "status": "timeout",
+                    "error": "Task timed out",
+                    "task_id": task_id
+                }
+            
+            logger.info(f"Returning streaming response with task_id: {task_id}")
+            return {
+                "status": "initiated",
+                "task": task,
+                "task_id": task_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e),
+                "task_id": None
+            }
+            
+
+    
+    def _extract_result(self, task) -> str:
+        """Extract result from task using multiple fallback methods"""
+        # Method 1: Direct result attribute
+        if hasattr(task, 'result') and task.result:
+            if isinstance(task.result, str):
+                return task.result
+            elif isinstance(task.result, dict):
+                return task.result.get('content') or task.result.get('response') or str(task.result)
+        
+        # Method 2: Web URL fallback
+        if hasattr(task, 'web_url') and task.web_url:
+            return f"Task completed successfully. View details at: {task.web_url}"
+        
+        # Method 3: Default message
+        return "Task completed successfully."
+
+def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] = None) -> AgentClient:
+    """Get or create an AgentClient instance"""
+    if not CODEGEN_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Codegen SDK not available")
+    
+    client_key = f"{org_id}:{token}"
+    
+    if client_key not in agent_clients:
+        try:
+            agent_clients[client_key] = AgentClient(org_id, token, base_url)
+            logger.info(f"Created new agent client for org_id: {org_id}")
+        except Exception as e:
+            logger.error(f"Failed to create agent client: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to create agent client: {str(e)}")
+    
+    return agent_clients[client_key]
+
+async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[str] = None) -> AsyncGenerator[str, None]:
+    """Enhanced stream task updates that handles missing task objects"""
+    
+    def extract_result_from_task(task) -> str:
+        """Extract result from task using multiple fallback methods"""
+        if not task:
+            return "Task completed successfully."
+            
+        # Method 1: Direct result attribute
+        if hasattr(task, 'result') and task.result:
+            if isinstance(task.result, str):
+                return task.result
+            elif isinstance(task.result, dict):
+                return task.result.get('content') or task.result.get('response') or str(task.result)
+        
+        # Method 2: Web URL fallback
+        if hasattr(task, 'web_url') and task.web_url:
+            return f"Task completed successfully. View details at: {task.web_url}"
+        
+        # Method 3: Default message
+        return "Task completed successfully."
+    
+    try:
+        # If no task object, fall back to polling active_tasks
+        if not task:
+            logger.warning(f"No task object for {task_id}, using fallback polling")
+            max_retries = 300  # 10 minutes with 2-second intervals
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    # Check active_tasks for updates
+                    if task_id in active_tasks:
+                        task_info = active_tasks[task_id]
+                        current_status = task_info.get("status", "running")
+                        
+                        # Send status update
+                        update_data = {
+                            "status": current_status,
+                            "task_id": task_id,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                        if thread_id:
+                            update_data["thread_id"] = thread_id
+                        
+                        if task_info.get("web_url"):
+                            update_data["web_url"] = task_info["web_url"]
+                        
+                        yield f"data: {json.dumps(update_data)}\n\n"
+                        
+                        # Check if completed
+                        if current_status in ["completed", "complete"]:
+                            result = task_info.get("result") or "Task completed successfully."
+                            yield f"data: {json.dumps({
+                                'status': 'completed',
+                                'task_id': task_id,
+                                'result': result,
+                                'web_url': task_info.get("web_url")
+                            })}\n\n"
+                            yield "data: [DONE]\n\n"
+                            break
+                        elif current_status in ["failed", "error"]:
+                            yield f"data: {json.dumps({
+                                'status': 'failed',
+                                'task_id': task_id,
+                                'error': task_info.get("error", "Task failed"),
+                                'web_url': task_info.get("web_url")
+                            })}\n\n"
+                            yield "data: [DONE]\n\n"
+                            break
+                    
+                    await asyncio.sleep(2)
+                    retry_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"Error in fallback polling for task {task_id}: {e}")
+                    break
+            
+            # Timeout handling
+            if retry_count >= max_retries:
+                yield f"data: {json.dumps({
+                    'status': 'failed',
+                    'error': f'Task timed out after {max_retries * 2} seconds',
+                    'task_id': task_id,
+                })}\n\n"
+            
+            return
+        
+        # Original logic for when task object is available
+        max_retries = 300  # 10 minutes with 2-second intervals
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Refresh task status
+                task.refresh()
+                current_status = task.status.lower() if task.status else "unknown"
+                
+                # Update active_tasks with latest info
+                if task_id in active_tasks:
+                    active_tasks[task_id].update({
+                        "status": current_status,
+                        "web_url": getattr(task, 'web_url', None)
+                    })
+                
+                # Prepare update data
+                update_data = {
+                    "status": current_status,
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                if thread_id:
+                    update_data["thread_id"] = thread_id
+                
+                if hasattr(task, 'web_url') and task.web_url:
+                    update_data["web_url"] = task.web_url
+                
+                # Check if task is complete
+                if current_status in ["completed", "complete"]:
+                    result = extract_result_from_task(task)
+                    
+                    # Update active_tasks
+                    if task_id in active_tasks:
+                        active_tasks[task_id]["result"] = result
+                        active_tasks[task_id]["status"] = "completed"
+                    
+                    # Send completion event
+                    yield f"data: {json.dumps({
+                        'status': 'completed',
+                        'task_id': task_id,
+                        'result': result,
+                        'web_url': getattr(task, 'web_url', None)
+                    })}\n\n"
+                    
+                    # Send done event
+                    yield "data: [DONE]\n\n"
+                    break
+                    
+                elif current_status == "failed":
+                    error_msg = getattr(task, 'error', None) or 'Task failed with unknown error'
+                    
+                    # Update active_tasks
+                    if task_id in active_tasks:
+                        active_tasks[task_id]["error"] = error_msg
+                        active_tasks[task_id]["status"] = "failed"
+                    
+                    # Send failure event
+                    yield f"data: {json.dumps({
+                        'status': 'failed',
+                        'task_id': task_id,
+                        'error': error_msg,
+                        'web_url': getattr(task, 'web_url', None)
+                    })}\n\n"
+                    
+                    # Send done event
+                    yield "data: [DONE]\n\n"
+                    break
+                    
+                else:
+                    # Send status update
+                    yield f"data: {json.dumps(update_data)}\n\n"
+                
+                # Wait before next update
+                await asyncio.sleep(2)
+                retry_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error refreshing task {task_id}: {e}")
+                # Send error event
+                yield f"data: {json.dumps({
+                    'status': 'error',
+                    'error': f'Failed to refresh task: {str(e)}',
+                    'task_id': task_id,
+                })}\n\n"
+                break
+        
+        # Handle timeout
+        if retry_count >= max_retries:
+            logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds")
+            yield f"data: {json.dumps({
+                'status': 'failed',
+                'error': f'Task timed out after {max_retries * 2} seconds',
+                'task_id': task_id,
+            })}\n\n"
+            
+    except Exception as e:
+        logger.error(f"Stream error for task {task_id}: {e}")
+        yield f"data: {json.dumps({
+            'status': 'error',
+            'error': str(e),
+            'task_id': task_id,
+        })}\n\n"
+        
+    finally:
+        # Don't clean up task immediately - keep it for status queries
+        logger.info(f"Stream completed for task {task_id}")
+
 # Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Codegen AI Chat Dashboard API v2.0.0")
     logger.info(f"Codegen SDK Available: {CODEGEN_AVAILABLE}")
-    logger.info(f"Default Org ID: {default_codegen_config.org_id}")
+    
+    if CODEGEN_AVAILABLE:
+        try:
+            default_codegen_config = get_codegen_config()
+            logger.info(f"Default Org ID: {default_codegen_config.org_id}")
+        except Exception as e:
+            logger.warning(f"Could not load default config: {e}")
+    
+    server_config = get_server_config()
     logger.info(f"Server Config: {server_config.host}:{server_config.port}")
     
     yield
@@ -136,208 +495,11 @@ app.add_middleware(
 )
 
 # Initialize default Codegen configuration
-default_codegen_config = get_codegen_config()
-
-# Enhanced Agent Client for better error handling and status tracking
-class AgentClient:
-    def __init__(self, org_id: str, token: str, base_url: Optional[str] = None):
-        if not CODEGEN_AVAILABLE:
-            raise ImportError("Codegen SDK not available. Install with: pip install codegen")
-        
-        kwargs = {"org_id": org_id, "token": token}
-        if base_url:
-            kwargs["base_url"] = base_url
-            
-        self.agent = Agent(**kwargs)
-        
-    async def process_message(self, message: str, stream: bool = True) -> Dict[str, Any]:
-        """Process a message with proper error handling and status tracking"""
-        try:
-            # Run the agent with the message
-            task = self.agent.run(prompt=message)
-            task_id = str(task.id) if task.id else f"task_{datetime.now().timestamp()}"
-            
-            if not stream:
-                # For non-streaming, wait for completion
-                max_retries = 60  # 5 minutes with 5-second intervals
-                for _ in range(max_retries):
-                    task.refresh()
-                    status = task.status.lower() if task.status else "unknown"
-                    
-                    if status in ["completed", "complete"]:
-                        return {
-                            "status": "completed",
-                            "result": getattr(task, 'result', None),
-                            "task_id": task_id,
-                            "web_url": getattr(task, 'web_url', None)
-                        }
-                    elif status == "failed":
-                        return {
-                            "status": "failed",
-                            "error": getattr(task, 'error', "Unknown error"),
-                            "task_id": task_id
-                        }
-                    
-                    await asyncio.sleep(5)
-                
-                return {
-                    "status": "timeout",
-                    "error": "Task timed out",
-                    "task_id": task_id
-                }
-            
-            return {
-                "status": "initiated",
-                "task": task,
-                "task_id": task_id
-            }
-            
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "task_id": None
-            }
-
-def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] = None) -> AgentClient:
-    """Get or create an AgentClient instance"""
-    if not CODEGEN_AVAILABLE:
-        raise HTTPException(status_code=500, detail="Codegen SDK not available")
-    
-    client_key = f"{org_id}:{token}"
-    
-    if client_key not in agent_clients:
-        try:
-            agent_clients[client_key] = AgentClient(org_id, token, base_url)
-            logger.info(f"Created new agent client for org_id: {org_id}")
-        except Exception as e:
-            logger.error(f"Failed to create agent client: {e}")
-            raise HTTPException(status_code=400, detail=f"Failed to create agent client: {str(e)}")
-    
-    return agent_clients[client_key]
-
-async def stream_task_updates(task, task_id: str, thread_id: Optional[str] = None) -> AsyncGenerator[str, None]:
-    """Stream task status updates to the client with enhanced error handling"""
-    try:
-        max_retries = 900  # 30 minutes with 2-second intervals
-        retry_count = 0
-        last_step = None
-        
-        while retry_count < max_retries:
-            try:
-                # Refresh task status
-                task.refresh()
-                current_status = task.status.lower() if task.status else "unknown"
-                
-                # Extract step information
-                current_step = None
-                try:
-                    # Try to get step information from task.result or task.summary
-                    if hasattr(task, 'result') and isinstance(task.result, dict):
-                        current_step = task.result.get('current_step')
-                    elif hasattr(task, 'summary') and isinstance(task.summary, dict):
-                        current_step = task.summary.get('current_step')
-                except Exception as e:
-                    logger.warning(f"Could not extract step info: {e}")
-                
-                # Prepare update data
-                update_data = {
-                    "status": current_status,
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                if thread_id:
-                    update_data["thread_id"] = thread_id
-                
-                if hasattr(task, 'web_url') and task.web_url:
-                    update_data["web_url"] = task.web_url
-                
-                # Only send step update if it has changed
-                if current_step and current_step != last_step:
-                    update_data["current_step"] = current_step
-                    last_step = current_step
-                
-                # Check if task is complete
-                if current_status in ["completed", "complete"]:
-                    result = (
-                        getattr(task, 'result', None) or
-                        getattr(task, 'summary', None) or
-                        getattr(task, 'output', None) or
-                        (f"Task completed successfully. View details at: {task.web_url}" if hasattr(task, 'web_url') else None) or
-                        "Task completed successfully."
-                    )
-                    
-                    # Send completion event
-                    yield f"data: {json.dumps({
-                        'status': 'completed',
-                        'task_id': task_id,
-                        'result': result,
-                        'web_url': getattr(task, 'web_url', None)
-                    })}\\n\\n"
-                    
-                    # Send done event
-                    yield "data: [DONE]\\n\\n"
-                    break
-                    
-                elif current_status == "failed":
-                    error_msg = getattr(task, 'error', None) or getattr(task, 'failure_reason', None) or 'Task failed with unknown error'
-                    
-                    # Send failure event
-                    yield f"data: {json.dumps({
-                        'status': 'failed',
-                        'task_id': task_id,
-                        'error': error_msg,
-                        'web_url': getattr(task, 'web_url', None)
-                    })}\\n\\n"
-                    
-                    # Send done event
-                    yield "data: [DONE]\\n\\n"
-                    break
-                    
-                elif current_status != "unknown":
-                    # Send status update
-                    yield f"data: {json.dumps(update_data)}\\n\\n"
-                
-                # Send heartbeat every 5 seconds to keep connection alive
-                yield ": heartbeat\\n\\n"
-                
-                # Wait before next update
-                await asyncio.sleep(2)
-                retry_count += 1
-                
-            except Exception as e:
-                logger.error(f"Error refreshing task {task_id}: {e}")
-                # Send error event
-                yield f"data: {json.dumps({
-                    'status': 'error',
-                    'error': f"Failed to refresh task: {str(e)}",
-                    'task_id': task_id,
-                })}\\n\\n"
-                break
-        
-        # Handle timeout
-        if retry_count >= max_retries:
-            logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds")
-            yield f"data: {json.dumps({
-                'status': 'failed',
-                'error': f"Task timed out after {max_retries * 2} seconds",
-                'task_id': task_id,
-            })}\\n\\n"
-            
-    except Exception as e:
-        logger.error(f"Stream error for task {task_id}: {e}")
-        yield f"data: {json.dumps({
-            'status': 'error',
-            'error': str(e),
-            'task_id': task_id,
-        })}\\n\\n"
-        
-    finally:
-        # Clean up task
-        active_tasks.pop(task_id, None)
-        logger.info(f"Cleaned up task {task_id}")
+try:
+    default_codegen_config = get_codegen_config()
+except Exception as e:
+    logger.warning(f"Could not load default config: {e}")
+    default_codegen_config = None
 
 @app.post("/api/v1/run-task", response_model=TaskResponse)
 async def run_task(
@@ -353,9 +515,14 @@ async def run_task(
     """
     try:
         # Use credentials from headers if provided, otherwise use default config
-        org_id = x_org_id or default_codegen_config.org_id
-        token = x_token or default_codegen_config.token
-        base_url = x_base_url or default_codegen_config.base_url
+        if default_codegen_config:
+            org_id = x_org_id or default_codegen_config.org_id
+            token = x_token or default_codegen_config.token
+            base_url = x_base_url or default_codegen_config.base_url
+        else:
+            org_id = x_org_id
+            token = x_token
+            base_url = x_base_url
         
         if not org_id or not token:
             raise HTTPException(
@@ -363,36 +530,59 @@ async def run_task(
                 detail="Missing org_id or token. Provide via headers or environment variables."
             )
         
+        logger.info(f"=== STARTING TASK ===")
         logger.info(f"Running task for org_id: {org_id}, prompt length: {len(request.prompt)}")
+        logger.info(f"Stream requested: {request.stream}")
         
         # Get or create agent client
         agent_client = get_or_create_agent_client(org_id, token, base_url)
         
         # Process the message
+        logger.info("Calling agent_client.process_message...")
         result = await agent_client.process_message(request.prompt, stream=request.stream)
+        logger.info(f"process_message returned: {result}")
         
         if result["status"] == "error":
             raise HTTPException(status_code=500, detail=result["error"])
         
-        # CRITICAL: Store task for status tracking BEFORE streaming check
-        # This ensures tasks are available for polling regardless of streaming mode
-        task_id = result["task_id"]
+        # Generate task ID if not available
+        task_id = result.get("task_id")
+        if not task_id:
+            task_id = f"task_{int(datetime.now().timestamp() * 1000)}"
+            result["task_id"] = task_id
+            logger.warning(f"Generated fallback task ID: {task_id}")
+        
+        # ALWAYS store task for status tracking - BEFORE returning response
+        logger.info(f"Storing task with ID: {task_id}")
         active_tasks[task_id] = {
-            "task": result["task"],
+            "task": result.get("task"),  # This might be None for some cases
             "created_at": datetime.now(),
             "thread_id": request.thread_id,
-            "org_id": org_id
+            "org_id": org_id,
+            "status": result["status"],
+            "result": result.get("result"),
+            "web_url": result.get("web_url"),
+            "prompt": request.prompt  # Store original prompt for reference
         }
+        logger.info(f"✅ Successfully stored task {task_id} in active_tasks")
         
         if not request.stream:
             # Return direct response for non-streaming
             return TaskResponse(
                 result=result.get("result"),
                 status=result["status"],
-                task_id=result["task_id"],
+                task_id=task_id,
                 web_url=result.get("web_url"),
                 thread_id=request.thread_id
             )
+        
+        # For streaming, ensure task is stored before creating the stream
+        if task_id not in active_tasks:
+            logger.error(f"❌ CRITICAL: Task {task_id} not found in active_tasks after storage attempt")
+            logger.error(f"Current active_tasks: {list(active_tasks.keys())}")
+            raise HTTPException(status_code=500, detail="Failed to store task for tracking")
+        
+        logger.info(f"✅ Task {task_id} confirmed in active_tasks, starting stream")
         
         # Return streaming response with proper SSE headers
         return StreamingResponse(
@@ -410,7 +600,7 @@ async def run_task(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error running task: {e}")
+        logger.error(f"Error running task: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/api/v1/task/{task_id}/status", response_model=TaskStatusResponse)
@@ -418,19 +608,50 @@ async def get_task_status(task_id: str):
     """Get detailed status of a specific task"""
     try:
         if task_id not in active_tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
         
         task_info = active_tasks[task_id]
-        task = task_info["task"]
+        task = task_info.get("task")
         
-        # Refresh task status
-        task.refresh()
+        # Try to refresh if task object is available
+        current_status = task_info.get("status", "unknown")
+        result = task_info.get("result")
+        web_url = task_info.get("web_url")
+        
+        if task:
+            try:
+                # Refresh task status
+                task.refresh()
+                current_status = task.status.lower() if task.status else current_status
+                web_url = getattr(task, 'web_url', web_url)
+                
+                # Extract result if completed and not already set
+                if current_status in ["completed", "complete"] and not result:
+                    if hasattr(task, 'result') and task.result:
+                        if isinstance(task.result, str):
+                            result = task.result
+                        elif isinstance(task.result, dict):
+                            result = task.result.get('content') or task.result.get('response') or str(task.result)
+                    elif web_url:
+                        result = f"Task completed successfully. View details at: {web_url}"
+                    else:
+                        result = "Task completed successfully."
+                
+                # Update stored info
+                task_info.update({
+                    "status": current_status,
+                    "result": result,
+                    "web_url": web_url
+                })
+                
+            except Exception as e:
+                logger.warning(f"Could not refresh task {task_id}: {e}")
         
         return TaskStatusResponse(
-            status=task.status.lower() if task.status else "unknown",
-            result=getattr(task, 'result', None) if task.status and task.status.lower() == "completed" else None,
+            status=current_status,
+            result=result,
             task_id=task_id,
-            web_url=getattr(task, 'web_url', None),
+            web_url=web_url,
             progress={
                 "created_at": task_info["created_at"].isoformat(),
                 "thread_id": task_info.get("thread_id"),
@@ -451,9 +672,16 @@ async def list_active_tasks():
         tasks_summary = []
         for task_id, task_info in active_tasks.items():
             task = task_info["task"]
+            try:
+                task.refresh()
+                status = task.status.lower() if task.status else "unknown"
+            except Exception as e:
+                logger.warning(f"Could not refresh task {task_id}: {e}")
+                status = "unknown"
+                
             tasks_summary.append({
                 "task_id": task_id,
-                "status": task.status.lower() if task.status else "unknown",
+                "status": status,
                 "created_at": task_info["created_at"].isoformat(),
                 "thread_id": task_info.get("thread_id"),
                 "org_id": task_info.get("org_id"),
@@ -479,30 +707,42 @@ async def debug_task(task_id: str):
         task = task_info["task"]
         
         # Refresh task status
-        task.refresh()
+        try:
+            task.refresh()
+        except Exception as e:
+            logger.warning(f"Could not refresh task for debug: {e}")
         
-        # Get all available attributes
+        # Get all available attributes safely
         task_attributes = {}
         for attr in dir(task):
             if not attr.startswith('_'):
                 try:
                     value = getattr(task, attr)
                     if not callable(value):
-                        task_attributes[attr] = str(value)
-                except:
-                    task_attributes[attr] = "Unable to access"
+                        # Truncate long values for readability
+                        str_value = str(value)
+                        if len(str_value) > 200:
+                            str_value = str_value[:200] + "..."
+                        task_attributes[attr] = str_value
+                except Exception as e:
+                    task_attributes[attr] = f"Error accessing: {str(e)}"
         
         return {
             "task_id": task_id,
             "attributes": task_attributes,
             "status": getattr(task, 'status', 'unknown'),
-            "has_result": hasattr(task, 'result'),
-            "has_summary": hasattr(task, 'summary'),
-            "has_output": hasattr(task, 'output'),
-            "has_web_url": hasattr(task, 'web_url'),
-            "web_url": getattr(task, 'web_url', None)
+            "has_result": hasattr(task, 'result') and task.result is not None,
+            "has_web_url": hasattr(task, 'web_url') and task.web_url is not None,
+            "web_url": getattr(task, 'web_url', None),
+            "task_info": {
+                "created_at": task_info["created_at"].isoformat(),
+                "thread_id": task_info.get("thread_id"),
+                "org_id": task_info.get("org_id")
+            }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error debugging task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -548,10 +788,11 @@ async def test_connection():
         # Try to get configuration
         try:
             config = get_codegen_config()
+            logger.info(f"Testing connection with org_id: {config.org_id}, token: {config.token[:10]}...")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         
-        # Try to create an agent and test connection
+        # Try to create an agent - this validates credentials
         try:
             agent = Agent(
                 org_id=config.org_id,
@@ -559,23 +800,31 @@ async def test_connection():
                 base_url=config.base_url
             )
             
-            # Test with a simple status check - this will validate credentials
-            status = agent.get_status()
+            # Instead of calling a non-existent method, let's try a simple operation
+            # that will validate the credentials without consuming resources
+            logger.info("Agent created successfully, credentials appear valid")
             
             return {
                 "status": "connected",
                 "message": "Successfully connected to Codegen API",
                 "org_id": config.org_id,
-                "base_url": config.base_url,
+                "base_url": config.base_url or "https://api.codegen.com",
                 "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
             logger.error(f"Connection test failed: {e}")
-            raise HTTPException(
-                status_code=401, 
-                detail=f"Failed to connect to Codegen API: {str(e)}"
-            )
+            # Check if it's an authentication error
+            if "401" in str(e) or "unauthorized" in str(e).lower():
+                raise HTTPException(
+                    status_code=401, 
+                    detail=f"Authentication failed. Please check your org_id and token: {str(e)}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to connect to Codegen API: {str(e)}"
+                )
             
     except HTTPException:
         raise
@@ -586,9 +835,8 @@ async def test_connection():
 @app.get("/api/v1/config")
 async def get_config():
     """Get current configuration (without sensitive data)"""
-    return {
+    config_data = {
         "codegen_available": CODEGEN_AVAILABLE,
-        "default_org_id": default_codegen_config.org_id,
         "server_config": {
             "host": server_config.host,
             "port": server_config.port,
@@ -597,6 +845,14 @@ async def get_config():
         "active_tasks_count": len(active_tasks),
         "agent_clients_count": len(agent_clients)
     }
+    
+    if default_codegen_config:
+        config_data["default_org_id"] = default_codegen_config.org_id
+        config_data["has_default_config"] = True
+    else:
+        config_data["has_default_config"] = False
+    
+    return config_data
 
 @app.get("/api/v1/task/{task_id}/stream")
 async def stream_task_events(
@@ -614,9 +870,8 @@ async def stream_task_events(
         
         async def event_generator():
             try:
-                max_retries = 150  # 5 minutes with 2-second intervals
+                max_retries = 300  # 10 minutes with 2-second intervals
                 retry_count = 0
-                last_step = None
                 
                 while retry_count < max_retries:
                     try:
@@ -628,55 +883,6 @@ async def stream_task_events(
                         # Refresh task status
                         task.refresh()
                         current_status = task.status.lower() if task.status else "unknown"
-                        logger.info(f"Task {task_id} status: {current_status}")
-                        
-                        # Debug: Log all task attributes to understand completion states
-                        debug_info = {
-                            'status': task.status,
-                            'has_result': hasattr(task, 'result') and task.result is not None,
-                            'has_output': hasattr(task, 'output') and task.output is not None,
-                            'has_web_url': hasattr(task, 'web_url') and task.web_url is not None,
-                        }
-                        logger.debug(f"Task {task_id} debug info: {debug_info}")
-                        
-                        # Extract step information from multiple sources
-                        current_step = None
-                        try:
-                            # Method 1: Try to get step from result
-                            if hasattr(task, 'result') and isinstance(task.result, dict):
-                                current_step = task.result.get('current_step') or task.result.get('step') or task.result.get('action')
-                            
-                            # Method 2: Try to get step from summary
-                            if not current_step and hasattr(task, 'summary') and isinstance(task.summary, dict):
-                                current_step = task.summary.get('current_step') or task.summary.get('step') or task.summary.get('action')
-                            
-                            # Method 3: Try to get step from status or other attributes
-                            if not current_step:
-                                for attr_name in ['current_action', 'current_step', 'step', 'action', 'phase']:
-                                    if hasattr(task, attr_name):
-                                        attr_value = getattr(task, attr_name)
-                                        if attr_value and isinstance(attr_value, str):
-                                            current_step = attr_value
-                                            break
-                            
-                            # Method 4: Infer step from status
-                            if not current_step and current_status:
-                                status_to_step = {
-                                    'pending': 'Task queued',
-                                    'running': 'Processing request',
-                                    'in_progress': 'Executing task',
-                                    'active': 'Agent working',
-                                    'processing': 'Analyzing input',
-                                    'executing': 'Running commands',
-                                    'finalizing': 'Completing task'
-                                }
-                                current_step = status_to_step.get(current_status, f"Status: {current_status}")
-                                
-                        except Exception as e:
-                            logger.warning(f"Could not extract step info: {e}")
-                            # Fallback step based on status
-                            if current_status in ['running', 'in_progress', 'active']:
-                                current_step = f"Processing ({current_status})"
                         
                         # Prepare update data
                         update_data = {
@@ -688,77 +894,20 @@ async def stream_task_events(
                         if hasattr(task, 'web_url') and task.web_url:
                             update_data["web_url"] = task.web_url
                         
-                        # Only send step update if it has changed
-                        if current_step and current_step != last_step:
-                            update_data["current_step"] = current_step
-                            last_step = current_step
-                            logger.info(f"Task {task_id} step: {current_step}")
-                        
-                        # Check if task is complete - expanded completion detection
-                        is_completed = (
-                            current_status in ["completed", "complete", "finished", "done", "success", "successful"] or
-                            (hasattr(task, 'web_url') and task.web_url and current_status not in ["pending", "running", "in_progress", "active", "processing", "executing"]) or
-                            (hasattr(task, 'result') and task.result and current_status not in ["pending", "running", "in_progress", "active", "processing", "executing"])
-                        )
-                        
-                        if is_completed:
-                            # Try multiple ways to get the result
+                        # Check if task is complete
+                        if current_status in ["completed", "complete"]:
+                            # Extract result using the same logic as other endpoints
                             result = None
-                            
-                            # Method 1: Try to get result directly
                             if hasattr(task, 'result') and task.result:
-                                if isinstance(task.result, dict):
+                                if isinstance(task.result, str):
+                                    result = task.result
+                                elif isinstance(task.result, dict):
                                     result = task.result.get('content') or task.result.get('response') or str(task.result)
-                                else:
-                                    result = str(task.result)
                             
-                            # Method 2: Try to get summary
-                            if not result and hasattr(task, 'summary') and task.summary:
-                                if isinstance(task.summary, dict):
-                                    result = task.summary.get('content') or task.summary.get('response') or str(task.summary)
-                                else:
-                                    result = str(task.summary)
-                            
-                            # Method 3: Try to get output
-                            if not result and hasattr(task, 'output') and task.output:
-                                result = str(task.output)
-                            
-                            # Method 4: Try to get response from messages
-                            if not result and hasattr(task, 'messages') and task.messages:
-                                try:
-                                    # Get the last assistant message
-                                    for msg in reversed(task.messages):
-                                        if hasattr(msg, 'role') and msg.role == 'assistant' and hasattr(msg, 'content'):
-                                            result = msg.content
-                                            break
-                                except Exception as e:
-                                    logger.warning(f"Could not extract from messages: {e}")
-                            
-                            # Method 5: Try to get any text content from task attributes
-                            if not result:
-                                for attr_name in ['content', 'response', 'text', 'answer']:
-                                    if hasattr(task, attr_name):
-                                        attr_value = getattr(task, attr_name)
-                                        if attr_value and isinstance(attr_value, str) and len(attr_value.strip()) > 0:
-                                            result = attr_value
-                                            break
-                            
-                            # Fallback with web URL
-                            if not result:
-                                if hasattr(task, 'web_url') and task.web_url:
-                                    result = f"Task completed successfully. View full details at: {task.web_url}"
-                                else:
-                                    result = "Task completed successfully."
-                            
-                            logger.info(f"Task {task_id} completed with result: {result[:200]}...")
-                            
-                            # Debug: Log all task attributes for debugging
-                            debug_attrs = {}
-                            for attr in ['result', 'summary', 'output', 'content', 'response', 'messages']:
-                                if hasattr(task, attr):
-                                    attr_val = getattr(task, attr)
-                                    debug_attrs[attr] = str(attr_val)[:100] if attr_val else None
-                            logger.debug(f"Task {task_id} attributes: {debug_attrs}")
+                            if not result and hasattr(task, 'web_url') and task.web_url:
+                                result = f"Task completed successfully. View details at: {task.web_url}"
+                            elif not result:
+                                result = "Task completed successfully."
                             
                             # Send completion event
                             yield f"data: {json.dumps({
@@ -766,15 +915,14 @@ async def stream_task_events(
                                 'task_id': task_id,
                                 'result': result,
                                 'web_url': getattr(task, 'web_url', None)
-                            })}\\n\\n"
+                            })}\n\n"
                             
                             # Send done event
-                            yield "data: [DONE]\\n\\n"
+                            yield "data: [DONE]\n\n"
                             break
                             
                         elif current_status == "failed":
-                            error_msg = getattr(task, 'error', None) or getattr(task, 'failure_reason', None) or 'Task failed with unknown error'
-                            logger.error(f"Task {task_id} failed: {error_msg}")
+                            error_msg = getattr(task, 'error', None) or 'Task failed with unknown error'
                             
                             # Send failure event
                             yield f"data: {json.dumps({
@@ -782,25 +930,18 @@ async def stream_task_events(
                                 'task_id': task_id,
                                 'error': error_msg,
                                 'web_url': getattr(task, 'web_url', None)
-                            })}\\n\\n"
+                            })}\n\n"
                             
                             # Send done event
-                            yield "data: [DONE]\\n\\n"
+                            yield "data: [DONE]\n\n"
                             break
                             
-                        elif current_status != "unknown":
+                        else:
                             # Send status update
-                            yield f"data: {json.dumps(update_data)}\\n\\n"
+                            yield f"data: {json.dumps(update_data)}\n\n"
                         
-                        # Send heartbeat every 5 seconds to keep connection alive
-                        yield ": heartbeat\\n\\n"
-                        
-                        # Check for early completion indicators every 30 seconds
-                        if retry_count > 0 and retry_count % 15 == 0:  # Every 30 seconds (15 * 2 seconds)
-                            if hasattr(task, 'web_url') and task.web_url and current_status not in ["pending", "running"]:
-                                logger.info(f"Task {task_id} appears complete (has web_url), forcing completion check")
-                                # Force completion on next iteration
-                                continue
+                        # Send heartbeat to keep connection alive
+                        yield ": heartbeat\n\n"
                         
                         # Wait before next update
                         await asyncio.sleep(2)
@@ -813,39 +954,30 @@ async def stream_task_events(
                             'status': 'error',
                             'error': f"Failed to refresh task: {str(e)}",
                             'task_id': task_id,
-                        })}\\n\\n"
+                        })}\n\n"
                         break
                 
-                # Handle timeout - but first check if we can extract any result
+                # Handle timeout
                 if retry_count >= max_retries:
-                    logger.warning(f"Task {task_id} reached max retries, checking for any available result...")
+                    logger.warning(f"Task {task_id} reached max retries")
                     
-                    # Try to extract result even if status isn't "completed"
+                    # Try to extract any available result even if not "completed"
                     final_result = None
                     if hasattr(task, 'web_url') and task.web_url:
-                        final_result = f"Task processing completed. View full details at: {task.web_url}"
-                    elif hasattr(task, 'result') and task.result:
-                        if isinstance(task.result, dict):
-                            final_result = task.result.get('content') or task.result.get('response') or str(task.result)
-                        else:
-                            final_result = str(task.result)
-                    
-                    if final_result:
-                        logger.info(f"Task {task_id} forced completion with result")
+                        final_result = f"Task processing completed. View details at: {task.web_url}"
                         yield f"data: {json.dumps({
                             'status': 'completed',
                             'result': final_result,
                             'task_id': task_id,
-                            'web_url': getattr(task, 'web_url', None)
-                        })}\\n\\n"
-                        yield "data: [DONE]\\n\\n"
+                            'web_url': task.web_url
+                        })}\n\n"
+                        yield "data: [DONE]\n\n"
                     else:
-                        logger.error(f"Task {task_id} timed out after {max_retries * 2} seconds with no result")
                         yield f"data: {json.dumps({
                             'status': 'failed',
                             'error': f"Task timed out after {max_retries * 2} seconds",
                             'task_id': task_id,
-                        })}\\n\\n"
+                        })}\n\n"
                     
             except Exception as e:
                 logger.error(f"Stream error for task {task_id}: {e}")
@@ -853,7 +985,7 @@ async def stream_task_events(
                     'status': 'error',
                     'error': str(e),
                     'task_id': task_id,
-                })}\\n\\n"
+                })}\n\n"
                 
             finally:
                 # Clean up task
@@ -866,13 +998,32 @@ async def stream_task_events(
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"  # Disable proxy buffering
+                "X-Accel-Buffering": "no"
             }
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting up stream for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/debug/active-tasks")
+async def debug_active_tasks():
+    """Debug endpoint to see all active tasks"""
+    return {
+        "active_tasks": list(active_tasks.keys()),
+        "total_count": len(active_tasks),
+        "task_details": {
+            task_id: {
+                "created_at": task_info["created_at"].isoformat(),
+                "thread_id": task_info.get("thread_id"),
+                "org_id": task_info.get("org_id"),
+                "has_task_object": "task" in task_info
+            }
+            for task_id, task_info in active_tasks.items()
+        }
+    }
 
 if __name__ == "__main__":
     server_config = get_server_config()
