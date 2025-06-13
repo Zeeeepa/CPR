@@ -434,6 +434,7 @@ const sendMessage = async () => {
       }
       
       try {
+        console.log(`Polling for task status: ${data.task_id}`)
         const statusResponse = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
           headers: {
             'X-Organization-ID': org_id_to_use,
@@ -447,6 +448,7 @@ const sendMessage = async () => {
           console.log('Poll status:', statusData)
           
           if (statusData.status === 'completed' && !aiMessage.sent) {
+            console.log('Poll detected completion:', statusData)
             aiMessage.content = statusData.result || 'Task completed successfully.'
             aiMessage.sent = true
             aiMessage.taskId = statusData.task_id
@@ -499,6 +501,8 @@ const sendMessage = async () => {
     
     eventSource.onmessage = (event) => {
       try {
+        console.log('Raw event data received:', event.data)
+        
         if (event.data === '[DONE]') {
           console.log('Stream completed')
           clearTimeout(timeoutId)
@@ -612,7 +616,14 @@ const sendMessage = async () => {
           saveToLocalStorage()
           
           console.log('Task completed with response:', finalResponse)
+          
+          // Close the event source after completion
+          eventSource.close()
+          clearTimeout(timeoutId)
+          clearInterval(pollInterval)
+          activeTasks.value = Math.max(0, activeTasks.value - 1)
         }
+        
         // Handle errors
         else if (parsed.status === 'failed' || parsed.status === 'error') {
           aiMessage.content = parsed.error || 'Task failed'
@@ -653,20 +664,9 @@ const sendMessage = async () => {
           
           // Only update message if it hasn't been completed
           if (!aiMessage.sent) {
-            aiMessage.content = 'Error: Failed to get response from agent. Please try again.'
-            aiMessage.sent = true
-            aiMessage.error = true
-            // Mark remaining steps as failed
-            if (aiMessage.steps) {
-              aiMessage.steps.forEach(step => {
-                if (step.status === 'pending' || step.status === 'active') {
-                  step.status = 'failed'
-                }
-              })
-            }
-            currentThread.value!.lastActivity = new Date()
-            saveToLocalStorage()
-            scrollToBottom()
+            // Check if we should fall back to polling
+            console.log('Falling back to polling for task status')
+            // Don't set error message here, let polling handle it
           }
         }
       }, 10000) // Wait 10 seconds before giving up on reconnection
