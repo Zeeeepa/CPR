@@ -235,6 +235,68 @@ const testConnection = async () => {
   }
 }
 
+// Function to force check task status and update UI
+const forceCheckTaskStatus = async (taskId: string, aiMessage: Message) => {
+  if (!taskId || aiMessage.sent) return false
+  
+  console.log(`Force checking task status for ${taskId}`)
+  
+  try {
+    // Get credentials from settings
+    const org_id_to_use = settings.value.codegenOrgId
+    const token_to_use = settings.value.codegenToken
+    const base_url = settings.value.apiBaseUrl
+    
+    const statusResponse = await retryRequest(`${BACKEND_URL}/api/v1/task/${taskId}/status`, {
+      headers: {
+        'X-Organization-ID': org_id_to_use,
+        'X-Token': token_to_use,
+        'X-Base-URL': base_url || ''
+      }
+    })
+    
+    if (statusResponse.ok) {
+      const statusData = await statusResponse.json()
+      console.log('Force check status result:', statusData)
+      
+      if (statusData.status === 'completed' && !aiMessage.sent) {
+        console.log('Force check detected completion:', statusData)
+        
+        // Update message with result
+        aiMessage.content = statusData.result || 'Task completed successfully.'
+        aiMessage.sent = true
+        aiMessage.taskId = statusData.task_id
+        aiMessage.webUrl = statusData.web_url
+        
+        // Mark all steps as completed
+        if (aiMessage.steps) {
+          aiMessage.steps.forEach(step => step.status = 'completed')
+          
+          // Add completion step
+          aiMessage.steps.push({
+            id: aiMessage.steps.length + 1,
+            title: 'Task Completed',
+            description: 'Response generated successfully',
+            status: 'completed'
+          })
+        }
+        
+        currentThread.value!.lastActivity = new Date()
+        saveToLocalStorage()
+        scrollToBottom()
+        activeTasks.value = Math.max(0, activeTasks.value - 1)
+        
+        console.log('Task completed via force check')
+        return true
+      }
+    }
+  } catch (error) {
+    console.error('Force check error:', error)
+  }
+  
+  return false
+}
+
 // Function to handle reconnection for EventSource
 const createEventSourceWithReconnect = (url: string, headers: Record<string, string>, maxRetries = 3) => {
   let retryCount = 0
@@ -588,25 +650,78 @@ const sendMessage = async () => {
 
     const data = await response.json()
     console.log('Task started:', data)
+    
+    // Check if the task is already completed (immediate response)
+    if (data.status === 'completed' && data.result) {
+      console.log('Task already completed with result:', data.result)
+      aiMessage.content = data.result
+      aiMessage.sent = true
+      aiMessage.taskId = data.task_id
+      aiMessage.webUrl = data.web_url
+      
+      // Mark all steps as completed
+      if (aiMessage.steps) {
+        aiMessage.steps.forEach(step => step.status = 'completed')
+        
+        // Add completion step if not already present
+        const hasCompletionStep = aiMessage.steps.some(step => 
+          step.title.toLowerCase().includes('completed') || 
+          step.title.toLowerCase().includes('finished')
+        )
+        
+        if (!hasCompletionStep) {
+          aiMessage.steps.push({
+            id: aiMessage.steps.length + 1,
+            title: 'Task Completed',
+            description: 'Response generated successfully',
+            status: 'completed'
+          })
+        }
+      }
+      
+      currentThread.value!.lastActivity = new Date()
+      saveToLocalStorage()
+      scrollToBottom()
+      activeTasks.value = Math.max(0, activeTasks.value - 1)
+      return
+    }
 
     // Set a timeout to prevent hanging forever
     const timeoutId = setTimeout(() => {
       if (!aiMessage.sent) {
-        aiMessage.content = 'The request timed out. Please try again.'
-        aiMessage.sent = true
-        aiMessage.error = true
-        // Mark remaining steps as failed
-        if (aiMessage.steps) {
-          aiMessage.steps.forEach(step => {
-            if (step.status === 'pending' || step.status === 'active') {
-              step.status = 'failed'
+        console.log('Request timed out, checking final status before giving up')
+        
+        // Try one last force check before giving up
+        forceCheckTaskStatus(data.task_id, aiMessage).then(success => {
+          if (!success) {
+            console.log('Force check failed, marking as timed out')
+            aiMessage.content = 'The request timed out. Please try again.'
+            aiMessage.sent = true
+            aiMessage.error = true
+            // Mark remaining steps as failed
+            if (aiMessage.steps) {
+              aiMessage.steps.forEach(step => {
+                if (step.status === 'pending' || step.status === 'active') {
+                  step.status = 'failed'
+                }
+              })
             }
-          })
-        }
-        currentThread.value!.lastActivity = new Date()
-        saveToLocalStorage()
-        scrollToBottom()
-        activeTasks.value = Math.max(0, activeTasks.value - 1)
+            currentThread.value!.lastActivity = new Date()
+            saveToLocalStorage()
+            scrollToBottom()
+            
+            // Clean up all intervals
+            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+            
+            // Close EventSource if it exists
+            if (typeof eventSourceManager !== 'undefined' && eventSourceManager) {
+              eventSourceManager.close()
+            }
+            
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
+          }
+        })
       }
     }, 300000) // 5 minutes
 
@@ -643,6 +758,7 @@ const sendMessage = async () => {
             return
           }
           
+          // Check for completed status
           if (statusData.status === 'completed' && !aiMessage.sent) {
             console.log('Poll detected completion:', statusData)
             
@@ -652,11 +768,13 @@ const sendMessage = async () => {
               statusData.result = String(statusData.result || '')
             }
             
+            // Set message content and mark as sent
             aiMessage.content = statusData.result || 'Task completed successfully.'
             aiMessage.sent = true
             aiMessage.taskId = statusData.task_id
             aiMessage.webUrl = statusData.web_url
             
+            // Mark all steps as completed
             if (aiMessage.steps) {
               aiMessage.steps.forEach(step => step.status = 'completed')
               
@@ -676,23 +794,48 @@ const sendMessage = async () => {
               }
             }
             
+            // Update UI and clean up
             currentThread.value!.lastActivity = new Date()
             saveToLocalStorage()
             scrollToBottom()
             clearInterval(pollInterval)
             clearTimeout(timeoutId)
+            
+            // Clear force check interval
+            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+            
+            // Close EventSource if it exists
+            if (typeof eventSourceManager !== 'undefined' && eventSourceManager) {
+              eventSourceManager.close()
+            }
+            
             activeTasks.value = Math.max(0, activeTasks.value - 1)
+            console.log('Task completed via polling')
           }
         }
       } catch (error) {
         console.error('Polling error:', error)
       }
-    }, 5000) // Poll every 5 seconds
+    }, 2000) // Poll every 2 seconds (reduced from 5 seconds)
 
     // Store task ID in message
     if (data && data.task_id) {
       aiMessage.taskId = data.task_id
     }
+
+    // Set up periodic force checks for completion
+    const forceCheckInterval = setInterval(async () => {
+      if (aiMessage.sent || !data.task_id) {
+        clearInterval(forceCheckInterval)
+        return
+      }
+      
+      console.log('Running periodic force check')
+      const success = await forceCheckTaskStatus(data.task_id, aiMessage)
+      if (success) {
+        clearInterval(forceCheckInterval)
+      }
+    }, 10000) // Check every 10 seconds
 
     // Connect to SSE stream for updates
     const eventSourceManager = createEventSourceWithReconnect(
@@ -713,9 +856,55 @@ const sendMessage = async () => {
           
           if (event.data === '[DONE]') {
             console.log('Stream completed')
-            clearTimeout(timeoutId)
-            clearInterval(pollInterval)
-            eventSourceManager.close()
+            
+            // Check if the message is already marked as sent
+            if (!aiMessage.sent) {
+              console.log('Stream completed but message not marked as sent, checking status')
+              
+              // Try a force check to get the final status
+              forceCheckTaskStatus(data.task_id, aiMessage).then(success => {
+                if (!success) {
+                  console.log('Force check failed after [DONE], using default completion')
+                  
+                  // If we still don't have content, set a default message
+                  if (!aiMessage.content) {
+                    aiMessage.content = 'Task completed successfully.'
+                  }
+                  
+                  aiMessage.sent = true
+                  
+                  // Mark all steps as completed
+                  if (aiMessage.steps) {
+                    aiMessage.steps.forEach(step => step.status = 'completed')
+                    
+                    // Add completion step if not already present
+                    const hasCompletionStep = aiMessage.steps.some(step => 
+                      step.title.toLowerCase().includes('completed') || 
+                      step.title.toLowerCase().includes('finished')
+                    )
+                    
+                    if (!hasCompletionStep) {
+                      aiMessage.steps.push({
+                        id: aiMessage.steps.length + 1,
+                        title: 'Task Completed',
+                        description: 'Response generated successfully',
+                        status: 'completed'
+                      })
+                    }
+                  }
+                  
+                  currentThread.value!.lastActivity = new Date()
+                  saveToLocalStorage()
+                  scrollToBottom()
+                }
+              })
+            }
+            
+            // Clean up resources
+            if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
+            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+            if (eventSourceManager) eventSourceManager.close()
             activeTasks.value = Math.max(0, activeTasks.value - 1)
             return
           }
@@ -834,14 +1023,17 @@ const sendMessage = async () => {
             
             currentThread.value!.lastActivity = new Date()
             saveToLocalStorage()
+            scrollToBottom()
             
             console.log('Task completed with response:', finalResponse)
             
             // Close the event source after completion
-            eventSourceManager.close()
-            clearTimeout(timeoutId)
-            clearInterval(pollInterval)
+            if (eventSourceManager) eventSourceManager.close()
+            if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
+            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
             activeTasks.value = Math.max(0, activeTasks.value - 1)
+            
+            console.log('Task completed via event source')
           }
           // Handle errors
           else if (parsed.status === 'failed' || parsed.status === 'error') {
@@ -858,6 +1050,20 @@ const sendMessage = async () => {
             }
             currentThread.value!.lastActivity = new Date()
             saveToLocalStorage()
+            scrollToBottom()
+            
+            // Clean up all intervals
+            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+            if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
+            
+            // Close EventSource if it exists
+            if (typeof eventSourceManager !== 'undefined' && eventSourceManager) {
+              eventSourceManager.close()
+            }
+            
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
+            console.log('Task failed:', parsed.error)
           }
 
           scrollToBottom()
@@ -882,6 +1088,16 @@ const sendMessage = async () => {
     currentThread.value!.lastActivity = new Date()
     saveToLocalStorage()
     scrollToBottom()
+    
+    // Clean up all intervals
+    if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+    if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+    if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
+    
+    // Close EventSource if it exists
+    if (typeof eventSourceManager !== 'undefined' && eventSourceManager) {
+      eventSourceManager.close()
+    }
   }
 }
 
