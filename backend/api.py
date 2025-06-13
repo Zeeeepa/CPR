@@ -8,6 +8,7 @@ import logging
 import os
 import json
 import uuid
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, AsyncGenerator, List
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
@@ -45,8 +46,7 @@ except Exception as e:
     print(f"Error: {e}")
 # Import the official Codegen SDK
 try:
-    from codegen.agents.agent import Agent
-    from codegen.agents.task import Task
+    from codegen.agents.agent import Agent, AgentTask
     CODEGEN_AVAILABLE = True
 except ImportError:
     CODEGEN_AVAILABLE = False
@@ -108,8 +108,7 @@ class AgentClient:
         # In mock mode, we don't need the actual SDK
         if not MOCK_MODE:
             try:
-                from codegen.agents.agent import Agent
-                from codegen.agents.task import Task
+                from codegen.agents.agent import Agent, AgentTask
                 
                 # Initialize Agent with proper parameters
                 kwargs = {"org_id": org_id, "token": token}
@@ -776,10 +775,10 @@ async def root():
 
 # Run the server if executed directly
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(
         "api:app",
         host=os.getenv("SERVER_HOST", "0.0.0.0"),
-        port=int(os.getenv("SERVER_PORT", 8002)),
+        port=int(os.getenv("SERVER_PORT", 8005)),
         reload=True
     )
-
