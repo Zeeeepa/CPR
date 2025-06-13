@@ -259,10 +259,18 @@ const forceCheckTaskStatus = async (taskId: string, aiMessage: Message) => {
       const statusData = await statusResponse.json()
       console.log('Force check status result:', statusData)
       
-      if (statusData.status === 'completed' && !aiMessage.sent) {
-        console.log('Force check detected completion:', statusData)
+      // Check for result field even if status is still 'running'
+      // This handles cases where the backend returns result but status is not updated
+      if ((statusData.status === 'completed' || statusData.result) && !aiMessage.sent) {
+        console.log('Poll detected completion or result:', statusData)
         
-        // Update message with result
+        // Ensure result is a string
+        if (statusData.result !== undefined && statusData.result !== null && typeof statusData.result !== 'string') {
+          console.warn('Status result is not a string, converting:', statusData.result)
+          statusData.result = String(statusData.result || '')
+        }
+        
+        // Set message content and mark as sent
         aiMessage.content = statusData.result || 'Task completed successfully.'
         aiMessage.sent = true
         aiMessage.taskId = statusData.task_id
@@ -272,21 +280,39 @@ const forceCheckTaskStatus = async (taskId: string, aiMessage: Message) => {
         if (aiMessage.steps) {
           aiMessage.steps.forEach(step => step.status = 'completed')
           
-          // Add completion step
-          aiMessage.steps.push({
-            id: aiMessage.steps.length + 1,
-            title: 'Task Completed',
-            description: 'Response generated successfully',
-            status: 'completed'
-          })
+          // Add completion step if not already present
+          const hasCompletionStep = aiMessage.steps.some(step => 
+            step.title.toLowerCase().includes('completed') || 
+            step.title.toLowerCase().includes('finished')
+          )
+          
+          if (!hasCompletionStep) {
+            aiMessage.steps.push({
+              id: aiMessage.steps.length + 1,
+              title: 'Task Completed',
+              description: 'Response generated successfully',
+              status: 'completed'
+            })
+          }
         }
         
+        // Update UI and clean up
         currentThread.value!.lastActivity = new Date()
         saveToLocalStorage()
         scrollToBottom()
-        activeTasks.value = Math.max(0, activeTasks.value - 1)
+        clearInterval(pollInterval)
+        clearTimeout(timeoutId)
         
-        console.log('Task completed via force check')
+        // Clear force check interval
+        if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+        
+        // Close EventSource if it exists
+        if (typeof eventSourceManager !== 'undefined' && eventSourceManager) {
+          eventSourceManager.close()
+        }
+        
+        activeTasks.value = Math.max(0, activeTasks.value - 1)
+        console.log('Task completed via polling')
         return true
       }
     }
@@ -758,9 +784,9 @@ const sendMessage = async () => {
             return
           }
           
-          // Check for completed status
-          if (statusData.status === 'completed' && !aiMessage.sent) {
-            console.log('Poll detected completion:', statusData)
+          // Check for completed status or result field
+          if ((statusData.status === 'completed' || statusData.result) && !aiMessage.sent) {
+            console.log('Poll detected completion or result:', statusData)
             
             // Ensure result is a string
             if (statusData.result !== undefined && statusData.result !== null && typeof statusData.result !== 'string') {
@@ -811,6 +837,7 @@ const sendMessage = async () => {
             
             activeTasks.value = Math.max(0, activeTasks.value - 1)
             console.log('Task completed via polling')
+            return
           }
         }
       } catch (error) {
@@ -851,143 +878,75 @@ const sendMessage = async () => {
     
     if (eventSource) {
       eventSource.onmessage = (event) => {
-        try {
-          console.log('Raw event data received:', event.data)
+        console.log('Event received:', event.data)
+        
+        if (event.data === '[DONE]') {
+          console.log('Stream completed')
           
-          if (event.data === '[DONE]') {
-            console.log('Stream completed')
+          // Check if the message is already marked as sent
+          if (!aiMessage.sent) {
+            console.log('Stream completed but message not marked as sent, checking status')
             
-            // Check if the message is already marked as sent
-            if (!aiMessage.sent) {
-              console.log('Stream completed but message not marked as sent, checking status')
-              
-              // Try a force check to get the final status
-              forceCheckTaskStatus(data.task_id, aiMessage).then(success => {
-                if (!success) {
-                  console.log('Force check failed after [DONE], using default completion')
-                  
-                  // If we still don't have content, set a default message
-                  if (!aiMessage.content) {
-                    aiMessage.content = 'Task completed successfully.'
-                  }
-                  
-                  aiMessage.sent = true
-                  
-                  // Mark all steps as completed
-                  if (aiMessage.steps) {
-                    aiMessage.steps.forEach(step => step.status = 'completed')
-                    
-                    // Add completion step if not already present
-                    const hasCompletionStep = aiMessage.steps.some(step => 
-                      step.title.toLowerCase().includes('completed') || 
-                      step.title.toLowerCase().includes('finished')
-                    )
-                    
-                    if (!hasCompletionStep) {
-                      aiMessage.steps.push({
-                        id: aiMessage.steps.length + 1,
-                        title: 'Task Completed',
-                        description: 'Response generated successfully',
-                        status: 'completed'
-                      })
-                    }
-                  }
-                  
-                  currentThread.value!.lastActivity = new Date()
-                  saveToLocalStorage()
-                  scrollToBottom()
+            // Try a force check to get the final status
+            forceCheckTaskStatus(data.task_id, aiMessage).then(success => {
+              if (!success) {
+                console.log('Force check failed after [DONE], using default completion')
+                
+                // If we still don't have content, set a default message
+                if (!aiMessage.content) {
+                  aiMessage.content = 'Task completed successfully.'
                 }
-              })
-            }
-            
-            // Clean up resources
-            if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
-            if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
-            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
-            if (eventSourceManager) eventSourceManager.close()
-            activeTasks.value = Math.max(0, activeTasks.value - 1)
-            return
+                
+                aiMessage.sent = true
+                
+                // Mark all steps as completed
+                if (aiMessage.steps) {
+                  aiMessage.steps.forEach(step => step.status = 'completed')
+                  
+                  // Add completion step if not already present
+                  const hasCompletionStep = aiMessage.steps.some(step => 
+                    step.title.toLowerCase().includes('completed') || 
+                    step.title.toLowerCase().includes('finished')
+                  )
+                  
+                  if (!hasCompletionStep) {
+                    aiMessage.steps.push({
+                      id: aiMessage.steps.length + 1,
+                      title: 'Task Completed',
+                      description: 'Response generated successfully',
+                      status: 'completed'
+                    })
+                  }
+                }
+                
+                currentThread.value!.lastActivity = new Date()
+                saveToLocalStorage()
+                scrollToBottom()
+              }
+            })
           }
-
+          
+          // Clean up resources
+          if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
+          if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+          if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
+          if (eventSourceManager) eventSourceManager.close()
+          activeTasks.value = Math.max(0, activeTasks.value - 1)
+          return
+        }
+        
+        try {
           let parsed: any
           try {
             parsed = JSON.parse(event.data)
-            console.log('Stream update:', parsed)
           } catch (parseError) {
-            console.error('Error parsing event data:', parseError, 'Raw data:', event.data)
+            console.error('Error parsing event data:', parseError)
             return
           }
-
-          // Validate parsed data
-          if (!parsed || typeof parsed !== 'object') {
-            console.error('Invalid parsed data, not an object:', parsed)
-            return
-          }
-
-          // Update step information based on current_step or status
-          if (aiMessage.steps) {
-            if (parsed.current_step) {
-              // Check if this step already exists
-              const stepExists = aiMessage.steps.some(step => 
-                step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
-                step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
-              )
-              
-              if (!stepExists) {
-                // Mark previous steps as completed
-                aiMessage.steps.forEach(step => {
-                  if (step.status === 'active') {
-                    step.status = 'completed'
-                  }
-                })
-                
-                // Add new step
-                aiMessage.steps.push({
-                  id: aiMessage.steps.length + 1,
-                  title: parsed.current_step,
-                  description: `Processing: ${parsed.current_step}`,
-                  status: 'active'
-                })
-                
-                console.log('Added new step:', parsed.current_step)
-              } else {
-                // Update existing step description
-                const existingStep = aiMessage.steps.find(step => 
-                  step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
-                  step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
-                )
-                if (existingStep && existingStep.status !== 'completed') {
-                  existingStep.status = 'active'
-                  existingStep.description = `Processing: ${parsed.current_step}`
-                }
-              }
-            } else if (parsed.status && ['running', 'in_progress', 'active', 'processing'].includes(parsed.status)) {
-              // Update description of active step with status
-              const activeStep = aiMessage.steps.find(step => step.status === 'active')
-              if (activeStep) {
-                activeStep.description = `Status: ${parsed.status}`
-              } else {
-                // No active step, mark first pending as active
-                const pendingStep = aiMessage.steps.find(step => step.status === 'pending')
-                if (pendingStep) {
-                  pendingStep.status = 'active'
-                  pendingStep.description = `Status: ${parsed.status}`
-                }
-              }
-            }
-          }
-
-          // Update task ID and web URL
-          if (parsed.task_id && !aiMessage.taskId) {
-            aiMessage.taskId = parsed.task_id
-          }
-          if (parsed.web_url) {
-            aiMessage.webUrl = parsed.web_url
-          }
-
-          // Handle completion
-          if (parsed.status === 'completed') {
-            console.log('Task completion detected:', parsed)
+          
+          // Handle completion or result field
+          if (parsed.status === 'completed' || parsed.result) {
+            console.log('Task completion or result detected:', parsed)
             
             // Ensure we have actual response text
             let finalResponse = parsed.result || 'Task completed successfully.'
@@ -1000,8 +959,10 @@ const sendMessage = async () => {
             console.log('Setting final response:', finalResponse)
             aiMessage.content = finalResponse
             aiMessage.sent = true
+            aiMessage.taskId = parsed.task_id
+            aiMessage.webUrl = parsed.web_url
             
-            // Mark all steps as completed and add final step
+            // Mark all steps as completed
             if (aiMessage.steps) {
               aiMessage.steps.forEach(step => step.status = 'completed')
               
@@ -1031,10 +992,12 @@ const sendMessage = async () => {
             if (eventSourceManager) eventSourceManager.close()
             if (typeof timeoutId !== 'undefined') clearTimeout(timeoutId)
             if (typeof pollInterval !== 'undefined') clearInterval(pollInterval)
+            if (typeof forceCheckInterval !== 'undefined') clearInterval(forceCheckInterval)
             activeTasks.value = Math.max(0, activeTasks.value - 1)
             
             console.log('Task completed via event source')
           }
+          
           // Handle errors
           else if (parsed.status === 'failed' || parsed.status === 'error') {
             aiMessage.content = parsed.error || 'Task failed'
@@ -1065,7 +1028,7 @@ const sendMessage = async () => {
             activeTasks.value = Math.max(0, activeTasks.value - 1)
             console.log('Task failed:', parsed.error)
           }
-
+          
           scrollToBottom()
         } catch (e) {
           console.error('Error processing stream message:', e)
