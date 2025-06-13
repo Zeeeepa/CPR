@@ -95,10 +95,18 @@
       </div>
       
       <div
-        v-else
+        v-else-if="message.content"
         class="markdown-content prose prose-invert max-w-none"
         v-html="renderMarkdown(message.content)"
       ></div>
+
+      <div
+        v-else-if="message.role === 'assistant' && !message.content && !message.steps"
+        class="flex items-center gap-2 text-sm opacity-75"
+      >
+        <div class="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
+        <span>Waiting for response...</span>
+      </div>
 
       <!-- Task Information -->
       <div

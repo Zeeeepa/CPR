@@ -271,45 +271,25 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
         steps = ["Analyzing request", "Processing task", "Generating response"]
         current_step_index = 0
         
-        # For mock mode, simulate a task with delays
+        # In mock mode, simulate streaming updates
         if MOCK_MODE:
-            # Step 1
+            # Simulate processing steps
+            for step in steps:
+                await asyncio.sleep(1)  # Simulate processing time
+                
+                yield json.dumps({
+                    "status": "running",
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "thread_id": thread_id,
+                    "current_step": step
+                })
+            
+            # Simulate completion
             await asyncio.sleep(1)
-            yield json.dumps({
-                "status": "running",
-                "task_id": task_id,
-                "timestamp": datetime.now().isoformat(),
-                "thread_id": thread_id,
-                "current_step": steps[0]
-            })
-            
-            # Step 2
-            await asyncio.sleep(2)
-            yield json.dumps({
-                "status": "running",
-                "task_id": task_id,
-                "timestamp": datetime.now().isoformat(),
-                "thread_id": thread_id,
-                "current_step": steps[1]
-            })
-            
-            # Step 3
-            await asyncio.sleep(2)
-            yield json.dumps({
-                "status": "running",
-                "task_id": task_id,
-                "timestamp": datetime.now().isoformat(),
-                "thread_id": thread_id,
-                "current_step": steps[2]
-            })
-            
-            # Completion
-            await asyncio.sleep(1)
-            
-            # Get the original message
-            message = active_tasks.get(task_id, {}).get("message", "")
             
             # Generate a mock response based on the message
+            message = active_tasks.get(task_id, {}).get("message", "")
             if "list" in message.lower() and "file" in message.lower():
                 result = "Here are the files in the current directory:\n\n```\nREADME.md\npackage.json\ntsconfig.json\napp.vue\npages/\ncomponents/\nassets/\npublic/\n```"
             elif "help" in message.lower():
@@ -318,17 +298,16 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
                 result = f"I've processed your request: '{message}'\n\nIs there anything specific you'd like me to explain or help with?"
             
             # Update active_tasks
-            if task_id in active_tasks:
-                active_tasks[task_id]["status"] = "completed"
-                active_tasks[task_id]["result"] = result
+            active_tasks[task_id]["status"] = "completed"
+            active_tasks[task_id]["result"] = result
             
-            # Send completion
+            # Send completion event
             yield json.dumps({
                 "status": "completed",
                 "task_id": task_id,
-                "result": result,
                 "timestamp": datetime.now().isoformat(),
                 "thread_id": thread_id,
+                "result": result,
                 "web_url": f"https://codegen.com/tasks/{task_id}"
             })
             
@@ -336,132 +315,178 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
             yield "[DONE]"
             return
         
-        # Stream updates with progress tracking
-        max_retries = 300  # 10 minutes with 2-second intervals
+        # For real mode with SDK
+        if not task:
+            logger.warning(f"No task object provided for task_id: {task_id}")
+            
+            # Send a few updates to show progress
+            for step in steps:
+                await asyncio.sleep(1)
+                
+                yield json.dumps({
+                    "status": "running",
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "thread_id": thread_id,
+                    "current_step": step
+                })
+            
+            # Send completion with error
+            yield json.dumps({
+                "status": "completed",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "result": "Task completed, but no response was received from the agent. Please try again.",
+                "error": "No task object available"
+            })
+            
+            # Send done event
+            yield "[DONE]"
+            return
+        
+        # Real task processing with SDK
+        max_retries = 60  # 5 minutes with 5-second intervals
         for i in range(max_retries):
             try:
                 # Refresh task status
                 task.refresh()
-                current_status = task.status.lower() if task.status else "unknown"
-                logger.info(f"Task {task_id} status: {current_status}")
                 
-                # Update step based on progress
-                if i % 10 == 0 and current_step_index < len(steps):
-                    current_step = steps[current_step_index]
-                    yield json.dumps({
-                        "status": "running",
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "thread_id": thread_id,
-                        "current_step": current_step
-                    })
-                    current_step_index = min(current_step_index + 1, len(steps) - 1)
+                # Get current status
+                status = task.status.lower() if task.status else "unknown"
+                logger.info(f"Task {task_id} status: {status} (attempt {i+1}/{max_retries})")
                 
-                # Check if task is complete
-                if current_status in ["completed", "complete"]:
+                # Send status update
+                yield json.dumps({
+                    "status": status,
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "thread_id": thread_id,
+                    "current_step": steps[min(current_step_index, len(steps) - 1)]
+                })
+                
+                # Update step index periodically
+                if i > 0 and i % 5 == 0 and current_step_index < len(steps) - 1:
+                    current_step_index += 1
+                
+                # Check if task is completed
+                if status in ["completed", "complete"]:
                     # Extract result
                     result = None
+                    web_url = None
+                    
+                    # Try to get result from task
                     if hasattr(task, 'result') and task.result:
                         if isinstance(task.result, str):
                             result = task.result
                         elif isinstance(task.result, dict):
                             result = task.result.get('content') or task.result.get('response') or str(task.result)
                     
-                    if not result and hasattr(task, 'web_url') and task.web_url:
-                        result = f"Task completed successfully. View details at: {task.web_url}"
-                    elif not result:
+                    # Try to get web URL
+                    if hasattr(task, 'web_url') and task.web_url:
+                        web_url = task.web_url
+                    
+                    # If no result, use default message
+                    if not result:
                         result = "Task completed successfully."
+                        if web_url:
+                            result += f" View details at: {web_url}"
+                    
+                    # Update active_tasks
+                    if task_id in active_tasks:
+                        active_tasks[task_id]["status"] = "completed"
+                        active_tasks[task_id]["result"] = result
+                        active_tasks[task_id]["web_url"] = web_url
                     
                     # Send completion event
                     yield json.dumps({
                         "status": "completed",
                         "task_id": task_id,
-                        "result": result,
                         "timestamp": datetime.now().isoformat(),
                         "thread_id": thread_id,
-                        "web_url": getattr(task, 'web_url', None)
+                        "result": result,
+                        "web_url": web_url
                     })
                     
                     # Send done event
                     yield "[DONE]"
-                    break
+                    return
+                
+                # Check if task failed
+                elif status in ["failed", "error"]:
+                    # Get error message
+                    error_message = "Task failed"
+                    if hasattr(task, 'error') and task.error:
+                        error_message = str(task.error)
                     
-                elif current_status == "failed":
-                    error_msg = getattr(task, 'error', None) or 'Task failed with unknown error'
+                    # Update active_tasks
+                    if task_id in active_tasks:
+                        active_tasks[task_id]["status"] = "failed"
+                        active_tasks[task_id]["error"] = error_message
                     
                     # Send failure event
                     yield json.dumps({
                         "status": "failed",
                         "task_id": task_id,
-                        "error": error_msg,
                         "timestamp": datetime.now().isoformat(),
                         "thread_id": thread_id,
-                        "web_url": getattr(task, 'web_url', None)
+                        "error": error_message
                     })
                     
                     # Send done event
                     yield "[DONE]"
-                    break
+                    return
                 
-                # Send heartbeat to keep connection alive
-                if i % 5 == 0:
-                    yield json.dumps({
-                        "status": "heartbeat",
-                        "task_id": task_id,
-                        "timestamp": datetime.now().isoformat()
-                    })
-                
-                # Wait before next update
-                await asyncio.sleep(2)
-                
-            except Exception as e:
-                logger.error(f"Error refreshing task {task_id}: {e}")
-                # Send error event but don't break the loop
-                yield json.dumps({
-                    "status": "error",
-                    "error": f"Failed to refresh task: {str(e)}",
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "recoverable": True  # Indicate this is a recoverable error
-                })
-                await asyncio.sleep(5)  # Wait longer before retry
-        
-        # Handle timeout
-        if current_status not in ["completed", "complete", "failed"]:
-            logger.warning(f"Task {task_id} reached max retries")
+                # Wait before next check
+                await asyncio.sleep(5)
             
-            # Try to extract any available result even if not "completed"
-            final_result = None
-            if hasattr(task, 'web_url') and task.web_url:
-                final_result = f"Task processing completed. View details at: {task.web_url}"
+            except Exception as e:
+                logger.error(f"Error refreshing task {task_id}: {e}", exc_info=True)
+                
+                # Send error update but continue trying
                 yield json.dumps({
-                    "status": "completed",
-                    "result": final_result,
+                    "status": "running",
                     "task_id": task_id,
                     "timestamp": datetime.now().isoformat(),
                     "thread_id": thread_id,
-                    "web_url": task.web_url
+                    "current_step": f"Retrying after error: {str(e)[:50]}..."
                 })
-                yield "[DONE]"
-            else:
-                yield json.dumps({
-                    "status": "timeout",
-                    "error": f"Task timed out after {max_retries * 2} seconds",
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "thread_id": thread_id
-                })
-                yield "[DONE]"
                 
-    except Exception as e:
-        logger.error(f"Stream error for task {task_id}: {e}")
+                await asyncio.sleep(5)
+        
+        # If we get here, task timed out
+        logger.warning(f"Task {task_id} timed out after {max_retries} attempts")
+        
+        # Update active_tasks
+        if task_id in active_tasks:
+            active_tasks[task_id]["status"] = "timeout"
+            active_tasks[task_id]["error"] = "Task timed out"
+        
+        # Send timeout event
         yield json.dumps({
-            "status": "error",
-            "error": str(e),
+            "status": "timeout",
             "task_id": task_id,
             "timestamp": datetime.now().isoformat(),
-            "thread_id": thread_id
+            "thread_id": thread_id,
+            "error": "Task timed out after 5 minutes"
         })
+        
+        # Send done event
+        yield "[DONE]"
+    
+    except Exception as e:
+        logger.error(f"Error in stream_task_updates_enhanced: {e}", exc_info=True)
+        
+        # Send error event
+        yield json.dumps({
+            "status": "error",
+            "task_id": task_id,
+            "timestamp": datetime.now().isoformat(),
+            "thread_id": thread_id,
+            "error": str(e)
+        })
+        
+        # Send done event
         yield "[DONE]"
 
 # Lifespan context manager
@@ -779,6 +804,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api:app",
         host=os.getenv("SERVER_HOST", "0.0.0.0"),
-        port=int(os.getenv("SERVER_PORT", 8005)),
+        port=int(os.getenv("SERVER_PORT", 8002)),
         reload=True
     )
