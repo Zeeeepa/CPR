@@ -18,7 +18,7 @@
           </label>
           <input
             v-model="localSettings.codegenToken"
-            type="password"
+            type="text"
             placeholder="sk-..."
             class="w-full bg-slate-700 text-white border border-slate-600 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
             required
@@ -41,22 +41,6 @@
           />
           <p class="text-xs text-gray-400 mt-2">
             Your Codegen organization ID
-          </p>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">
-            Backend URL
-          </label>
-          <input
-            v-model="localSettings.backendUrl"
-            type="url"
-            placeholder="http://localhost:8002"
-            class="w-full bg-slate-700 text-white border border-slate-600 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-            required
-          />
-          <p class="text-xs text-gray-400 mt-2">
-            Backend API server URL
           </p>
         </div>
 
