@@ -175,11 +175,13 @@ const messagesContainer = ref<HTMLElement | null>(null)
 
 // Settings
 const settings = ref({
-  backendUrl: process.env.BACKEND_URL || 'http://localhost:8002',
-  orgId: '',
-  token: '',
+  codegenToken: '',
+  codegenOrgId: '',
   apiBaseUrl: ''
 })
+
+// Hardcoded backend URL (no longer configurable)
+const BACKEND_URL = 'http://localhost:8002'
 
 // Load settings from localStorage
 onMounted(() => {
@@ -209,7 +211,7 @@ const testConnection = async () => {
   connected.value = false
   
   try {
-    const response = await fetch(`${settings.value.backendUrl}/api/v1/test-connection`, {
+    const response = await fetch(`${BACKEND_URL}/api/v1/test-connection`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -321,12 +323,12 @@ const sendMessage = async () => {
     activeTasks.value++
 
     // Initial request to start the task
-    const response = await fetch(`${settings.value.backendUrl}/api/v1/run-task`, {
+    const response = await fetch(`${BACKEND_URL}/api/v1/run-task`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Organization-ID': settings.value.orgId,
-        'X-API-Token': settings.value.token,
+        'X-Organization-ID': settings.value.codegenOrgId,
+        'X-API-Token': settings.value.codegenToken,
         'X-API-Base-URL': settings.value.apiBaseUrl || ''
       },
       body: JSON.stringify({
@@ -349,7 +351,7 @@ const sendMessage = async () => {
     }
 
     // Connect to SSE stream for updates
-    const eventSource = new EventSource(`${settings.value.backendUrl}/api/v1/task/${data.task_id}/stream`)
+    const eventSource = new EventSource(`${BACKEND_URL}/api/v1/task/${data.task_id}/stream`)
     
     eventSource.onmessage = (event) => {
       try {
