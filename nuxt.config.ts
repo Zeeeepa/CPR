@@ -6,10 +6,13 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
     public: {
-      backendUrl: process.env.BACKEND_URL || 'http://localhost:8887'
+      backendUrl: process.env.BACKEND_URL || 'http://localhost:8002'
     }
   },
   ssr: false,
+  devServer: {
+    port: 3001
+  },
   tailwindcss: {
     cssPath: '~/assets/css/main.css',
     configPath: 'tailwind.config.js'

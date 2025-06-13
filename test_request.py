@@ -11,7 +11,7 @@ from sseclient import SSEClient
 import requests
 
 # Configuration
-url = "http://localhost:8887/api/v1/run-task"
+url = "http://localhost:8002/api/v1/run-task"
 org_id = os.getenv("CODEGEN_ORG_ID")
 token = os.getenv("CODEGEN_TOKEN")
 
@@ -49,7 +49,7 @@ def test_streaming():
     
     # 2. Connect to SSE stream
     print("\nConnecting to SSE stream...")
-    stream_url = f"http://localhost:8887/api/v1/task/{task_id}/stream"
+    stream_url = f"http://localhost:8002/api/v1/task/{task_id}/stream"
     client = SSEClient(stream_url)
     
     try:
@@ -91,4 +91,3 @@ def test_streaming():
 
 if __name__ == "__main__":
     test_streaming()
-

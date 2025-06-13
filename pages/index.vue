@@ -172,7 +172,7 @@ const messagesContainer = ref<HTMLElement | null>(null)
 
 // Settings
 const settings = ref({
-  backendUrl: process.env.BACKEND_URL || 'http://localhost:8887',
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:8002',
   orgId: '',
   token: '',
   apiBaseUrl: ''
