@@ -79,7 +79,7 @@ def get_codegen_config() -> CodegenConfig:
     return CodegenConfig(
         org_id=org_id,
         token=token,
-        base_url=os.getenv("CODEGEN_BASE_URL", "https://codegen-sh-rest-api.modal.run")
+        base_url=os.getenv("CODEGEN_BASE_URL")  # Don't use default base_url, let SDK use its default
     )
 
 def get_server_config() -> ServerConfig:
@@ -160,7 +160,7 @@ class AgentClient:
                     task.refresh()
                     status = task.status.lower() if task.status else "unknown"
                     
-                    if status == "completed":
+                    if status in ["completed", "complete"]:
                         return {
                             "status": "completed",
                             "result": getattr(task, 'result', None),
@@ -681,7 +681,7 @@ async def stream_task_events(
                             logger.info(f"Task {task_id} step: {current_step}")
                         
                         # Check if task is complete
-                        if current_status == "completed":
+                        if current_status in ["completed", "complete"]:
                             # Try multiple ways to get the result
                             result = None
                             
