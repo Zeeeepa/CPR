@@ -7,7 +7,6 @@ A chat interface for interacting with Codegen AI agents.
 - Real-time chat interface with Codegen AI agents
 - Streaming responses with progress indicators
 - Settings management for API credentials
-- Mock mode for testing without actual Codegen API credentials
 - Responsive design for desktop and mobile
 
 ## Architecture
@@ -97,12 +96,6 @@ For testing the backend API directly:
 ```bash
 python test_request.py
 ```
-
-## Mock Mode
-
-The application supports a mock mode for testing without actual Codegen API credentials. This is enabled by default in the backend server.
-
-To disable mock mode and use real Codegen API credentials, set `MOCK_MODE = False` in `backend/api.py`.
 
 ## Stopping the Application
 

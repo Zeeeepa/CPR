@@ -30,7 +30,7 @@ print(f"Org ID: {org_id}")
 print(f"Token: {token[:10]}..." if token else "Token: None")
 
 # Mock data for testing
-MOCK_MODE = True
+MOCK_MODE = False
 active_tasks = {}
 
 # Test SDK import and basic initialization

@@ -81,6 +81,10 @@ def test_connection():
             data = response.json()
             print_pass(f"Backend connection test")
             print(f"     Status: {data.get('status', 'unknown')}")
+            if data.get("status") != "success":
+                print_fail("Connection to Codegen API failed")
+                print(f"     Error: {data.get('error', 'Unknown error')}")
+                return False
             return True
         else:
             print_fail(f"Backend connection test")
@@ -277,4 +281,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -1,16 +1,20 @@
+#!/usr/bin/env python3
 """
-Manual test script for SSE streaming
+Test script for CPR backend API
+Tests task creation and streaming with actual Codegen API
 """
 
-import asyncio
-import json
 import os
 import sys
-from datetime import datetime
+import time
+import json
 import requests
+import subprocess
+from datetime import datetime
 
 # Configuration
-url = "http://localhost:8002/api/v1/run-task"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8002")
+url = f"{BACKEND_URL}/api/v1/run-task"
 org_id = os.getenv("CODEGEN_ORG_ID", "123")
 token = os.getenv("CODEGEN_TOKEN", "sk-test-token")
 
@@ -100,34 +104,32 @@ def test_streaming():
     print("-" * 50)
 
 def test_connection():
-    """Test the connection to the backend API"""
-    print("\n🔌 Testing connection to backend API...\n")
+    """Test connection to backend API and Codegen API"""
+    print("\n" + "=" * 60)
+    print("Testing connection to backend API and Codegen API...")
+    print("=" * 60)
     
     try:
         response = requests.post(
-            "http://localhost:8002/api/v1/test-connection",
+            f"{BACKEND_URL}/api/v1/test-connection",
             headers={
-                "Content-Type": "application/json",
-                "X-Organization-ID": org_id,
-                "X-API-Token": token
+                "X-Organization-ID": os.environ.get("CODEGEN_ORG_ID", ""),
+                "X-Token": os.environ.get("CODEGEN_TOKEN", "")
             }
         )
         
-        if response.ok:
+        if response.status_code == 200:
             data = response.json()
-            print("✅ Connection successful!")
             print(f"Status: {data.get('status', 'unknown')}")
-            print(f"Message: {data.get('message', 'No message')}")
-            print(f"Organization ID: {data.get('org_id', 'Not provided')}")
-            print(f"Base URL: {data.get('base_url', 'Not provided')}")
+            if data.get("status") != "success":
+                print(f"Error: {data.get('error', 'Unknown error')}")
+                return False
             return True
         else:
-            print(f"❌ Connection failed: {response.status_code}")
-            print(response.text)
+            print(f"Status code: {response.status_code}, Response: {response.text}")
             return False
-            
     except Exception as e:
-        print(f"❌ Error testing connection: {e}")
+        print(f"Error: {str(e)}")
         return False
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ if [ -z "$CODEGEN_ORG_ID" ]; then
 fi
 
 echo -e "${GREEN}Environment variables are set correctly${NC}"
+echo "CODEGEN_ORG_ID: $CODEGEN_ORG_ID"
+echo "CODEGEN_TOKEN: ${CODEGEN_TOKEN:0:10}..."
 echo ""
 
 # Check if ports are available
@@ -130,4 +132,3 @@ else
     echo -e "${RED}Validation failed. Please check the logs.${NC}"
     exit 1
 fi
-
