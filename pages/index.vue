@@ -353,11 +353,17 @@ const sendMessage = async () => {
     // Connect to SSE stream for updates
     const eventSource = new EventSource(`${BACKEND_URL}/api/v1/task/${data.task_id}/stream`)
     
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error)
+      // Don't close immediately, let it retry
+    }
+    
     eventSource.onmessage = (event) => {
       try {
         if (event.data === '[DONE]') {
           console.log('Stream completed')
           clearTimeout(timeoutId)
+          clearInterval(pollInterval)
           eventSource.close()
           activeTasks.value = Math.max(0, activeTasks.value - 1)
           return
@@ -429,6 +435,8 @@ const sendMessage = async () => {
 
         // Handle completion
         if (parsed.status === 'completed') {
+          console.log('Task completion detected:', parsed)
+          
           // Ensure we have actual response text
           let finalResponse = parsed.result || 'Task completed successfully.'
           
@@ -437,6 +445,7 @@ const sendMessage = async () => {
             finalResponse = `Task completed successfully. View full details at: ${parsed.web_url}`
           }
           
+          console.log('Setting final response:', finalResponse)
           aiMessage.content = finalResponse
           aiMessage.sent = true
           
@@ -488,10 +497,48 @@ const sendMessage = async () => {
       }
     }
 
+    // Add polling fallback in case SSE fails
+    const pollTaskStatus = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`)
+        if (response.ok) {
+          const status = await response.json()
+          console.log('Polling status:', status)
+          
+          if (status.status === 'completed' && !aiMessage.sent) {
+            console.log('Completion detected via polling')
+            const finalResponse = status.result || 'Task completed successfully.'
+            aiMessage.content = finalResponse
+            aiMessage.sent = true
+            
+            // Mark all steps as completed
+            if (aiMessage.steps) {
+              aiMessage.steps.forEach(step => step.status = 'completed')
+            }
+            
+            currentThread.value!.lastActivity = new Date()
+            saveToLocalStorage()
+            scrollToBottom()
+            
+            eventSource.close()
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
+            clearTimeout(timeoutId)
+            clearInterval(pollInterval)
+          }
+        }
+      } catch (error) {
+        console.error('Polling error:', error)
+      }
+    }
+    
+    // Poll every 10 seconds as fallback
+    const pollInterval = setInterval(pollTaskStatus, 10000)
+    
     // Add timeout to prevent infinite spinning
     const timeoutId = setTimeout(() => {
       console.warn('Task timeout after 5 minutes')
       eventSource.close()
+      clearInterval(pollInterval)
       activeTasks.value = Math.max(0, activeTasks.value - 1)
       
       if (!aiMessage.sent) {
