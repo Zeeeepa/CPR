@@ -327,9 +327,9 @@ const sendMessage = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Org-ID': settings.value.codegenOrgId,
-        'X-Token': settings.value.codegenToken,
-        'X-Base-URL': settings.value.apiBaseUrl || ''
+        'X-Organization-ID': org_id_to_use,
+        'X-Token': token_to_use,
+        'X-Base-URL': base_url || ''
       },
       body: JSON.stringify({
         prompt,
@@ -339,20 +339,17 @@ const sendMessage = async () => {
     })
 
     if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`Failed to start task: ${response.status} ${response.statusText} - ${errorText}`)
+      throw new Error(`API error: ${response.status} ${await response.text()}`)
     }
 
     const data = await response.json()
     console.log('Task started:', data)
 
-    // Set up timeout for the entire process
+    // Set up timeout for 5 minutes
     const timeoutId = setTimeout(() => {
-      console.warn('Task timeout after 5 minutes')
-      activeTasks.value = Math.max(0, activeTasks.value - 1)
-      
+      console.error('Task timed out after 5 minutes')
       if (!aiMessage.sent) {
-        aiMessage.content = 'Task timed out after 5 minutes. Please try again.'
+        aiMessage.content = 'Error: Task timed out after 5 minutes. Please try again.'
         aiMessage.sent = true
         aiMessage.error = true
         if (aiMessage.steps) {
@@ -365,6 +362,7 @@ const sendMessage = async () => {
         currentThread.value!.lastActivity = new Date()
         saveToLocalStorage()
         scrollToBottom()
+        activeTasks.value = Math.max(0, activeTasks.value - 1)
       }
     }, 300000) // 5 minutes
 
@@ -378,9 +376,9 @@ const sendMessage = async () => {
       try {
         const statusResponse = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
           headers: {
-            'X-Org-ID': settings.value.codegenOrgId,
-            'X-Token': settings.value.codegenToken,
-            'X-Base-URL': settings.value.apiBaseUrl || ''
+            'X-Organization-ID': org_id_to_use,
+            'X-Token': token_to_use,
+            'X-Base-URL': base_url || ''
           }
         })
         
