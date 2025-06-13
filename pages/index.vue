@@ -333,22 +333,101 @@ const sendMessage = async () => {
       },
       body: JSON.stringify({
         prompt,
-        stream: false,  // Use non-streaming for reliable task creation
+        stream: true,
         thread_id: currentThread.value.id
       })
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('Failed to start task:', response.status, errorText)
-      throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`)
+      throw new Error(`Failed to start task: ${response.status} ${response.statusText} - ${errorText}`)
     }
 
     const data = await response.json()
-    console.log('Task started successfully:', data)
+    console.log('Task started:', data)
 
-    // Update AI message with task ID
-    if (data.task_id) {
+    // Set up timeout for the entire process
+    const timeoutId = setTimeout(() => {
+      console.warn('Task timeout after 5 minutes')
+      activeTasks.value = Math.max(0, activeTasks.value - 1)
+      
+      if (!aiMessage.sent) {
+        aiMessage.content = 'Task timed out after 5 minutes. Please try again.'
+        aiMessage.sent = true
+        aiMessage.error = true
+        if (aiMessage.steps) {
+          aiMessage.steps.forEach(step => {
+            if (step.status === 'pending' || step.status === 'active') {
+              step.status = 'failed'
+            }
+          })
+        }
+        currentThread.value!.lastActivity = new Date()
+        saveToLocalStorage()
+        scrollToBottom()
+      }
+    }, 300000) // 5 minutes
+
+    // Set up polling as a fallback
+    const pollInterval = setInterval(async () => {
+      if (aiMessage.sent) {
+        clearInterval(pollInterval)
+        return
+      }
+      
+      try {
+        const statusResponse = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
+          headers: {
+            'X-Org-ID': settings.value.codegenOrgId,
+            'X-Token': settings.value.codegenToken,
+            'X-Base-URL': settings.value.apiBaseUrl || ''
+          }
+        })
+        
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json()
+          console.log('Poll status:', statusData)
+          
+          if (statusData.status === 'completed' && !aiMessage.sent) {
+            aiMessage.content = statusData.result || 'Task completed successfully.'
+            aiMessage.sent = true
+            aiMessage.taskId = statusData.task_id
+            aiMessage.webUrl = statusData.web_url
+            
+            if (aiMessage.steps) {
+              aiMessage.steps.forEach(step => step.status = 'completed')
+              
+              // Add completion step if not already present
+              const hasCompletionStep = aiMessage.steps.some(step => 
+                step.title.toLowerCase().includes('completed') || 
+                step.title.toLowerCase().includes('finished')
+              )
+              
+              if (!hasCompletionStep) {
+                aiMessage.steps.push({
+                  id: aiMessage.steps.length + 1,
+                  title: 'Task Completed',
+                  description: 'Response generated successfully',
+                  status: 'completed'
+                })
+              }
+            }
+            
+            currentThread.value!.lastActivity = new Date()
+            saveToLocalStorage()
+            scrollToBottom()
+            clearInterval(pollInterval)
+            clearTimeout(timeoutId)
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
+          }
+        }
+      } catch (error) {
+        console.error('Polling error:', error)
+      }
+    }, 5000) // Poll every 5 seconds
+
+    // Store task ID in message
+    if (data && data.task_id) {
       aiMessage.taskId = data.task_id
     }
 
@@ -499,103 +578,40 @@ const sendMessage = async () => {
       }
     }
 
-    // Add polling fallback in case SSE fails
-    const pollTaskStatus = async () => {
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
-          headers: {
-            'X-Org-ID': settings.value.codegenOrgId,
-            'X-Token': settings.value.codegenToken,
-            'X-Base-URL': settings.value.apiBaseUrl || ''
-          }
-        })
-        if (response.ok) {
-          const status = await response.json()
-          console.log('Polling status:', status)
+    // Handle SSE errors
+    eventSource.onerror = (error) => {
+      console.error('EventSource error:', error)
+      
+      // Don't immediately close - let the browser try to reconnect
+      setTimeout(() => {
+        // If after 10 seconds we still haven't received a completion, 
+        // then consider it a failure and clean up
+        if (!aiMessage.sent) {
+          console.error('SSE connection failed to recover')
+          eventSource.close()
+          clearTimeout(timeoutId)
+          clearInterval(pollInterval)
+          activeTasks.value = Math.max(0, activeTasks.value - 1)
           
-          if (status.status === 'completed' && !aiMessage.sent) {
-            console.log('Completion detected via polling')
-            const finalResponse = status.result || 'Task completed successfully.'
-            aiMessage.content = finalResponse
+          // Only update message if it hasn't been completed
+          if (!aiMessage.sent) {
+            aiMessage.content = 'Error: Failed to get response from agent. Please try again.'
             aiMessage.sent = true
-            
-            // Mark all steps as completed
+            aiMessage.error = true
+            // Mark remaining steps as failed
             if (aiMessage.steps) {
-              aiMessage.steps.forEach(step => step.status = 'completed')
+              aiMessage.steps.forEach(step => {
+                if (step.status === 'pending' || step.status === 'active') {
+                  step.status = 'failed'
+                }
+              })
             }
-            
             currentThread.value!.lastActivity = new Date()
             saveToLocalStorage()
             scrollToBottom()
-            
-            eventSource.close()
-            activeTasks.value = Math.max(0, activeTasks.value - 1)
-            clearTimeout(timeoutId)
-            clearInterval(pollInterval)
-          }
-        } else {
-          console.error('Status polling failed:', response.status, response.statusText)
-          // If we get 404, the task might not be stored properly
-          if (response.status === 404) {
-            console.error('Task not found - possible backend storage issue')
           }
         }
-      } catch (error) {
-        console.error('Polling error:', error)
-        // Don't spam errors, but log them for debugging
-      }
-    }
-    
-    // Start polling immediately, then every 3 seconds for responsive updates
-    pollTaskStatus() // First poll immediately
-    const pollInterval = setInterval(pollTaskStatus, 3000)
-    
-    // Add timeout to prevent infinite spinning
-    const timeoutId = setTimeout(() => {
-      console.warn('Task timeout after 5 minutes')
-      eventSource.close()
-      clearInterval(pollInterval)
-      activeTasks.value = Math.max(0, activeTasks.value - 1)
-      
-      if (!aiMessage.sent) {
-        aiMessage.content = 'Task timed out after 5 minutes. Please try again.'
-        aiMessage.sent = true
-        aiMessage.error = true
-        if (aiMessage.steps) {
-          aiMessage.steps.forEach(step => {
-            if (step.status === 'pending' || step.status === 'active') {
-              step.status = 'failed'
-            }
-          })
-        }
-        currentThread.value!.lastActivity = new Date()
-        saveToLocalStorage()
-        scrollToBottom()
-      }
-    }, 300000) // 5 minutes
-
-    eventSource.onerror = (error) => {
-      console.error('EventSource error:', error)
-      clearTimeout(timeoutId)
-      eventSource.close()
-      activeTasks.value = Math.max(0, activeTasks.value - 1)
-      
-      // Only update message if it hasn't been completed
-      if (!aiMessage.sent) {
-        aiMessage.content = 'Error: Failed to get response from agent'
-        aiMessage.sent = true
-        aiMessage.error = true
-        // Mark remaining steps as failed
-        if (aiMessage.steps) {
-          aiMessage.steps.forEach(step => {
-            if (step.status === 'pending' || step.status === 'active') {
-              step.status = 'failed'
-            }
-          })
-        }
-        currentThread.value!.lastActivity = new Date()
-        saveToLocalStorage()
-      }
+      }, 10000) // Wait 10 seconds before giving up on reconnection
     }
 
   } catch (error) {
@@ -612,6 +628,7 @@ const sendMessage = async () => {
     }
     currentThread.value!.lastActivity = new Date()
     saveToLocalStorage()
+    scrollToBottom()
   }
 }
 
