@@ -327,9 +327,9 @@ const sendMessage = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Organization-ID': settings.value.codegenOrgId,
-        'X-API-Token': settings.value.codegenToken,
-        'X-API-Base-URL': settings.value.apiBaseUrl || ''
+        'X-Org-ID': settings.value.codegenOrgId,
+        'X-Token': settings.value.codegenToken,
+        'X-Base-URL': settings.value.apiBaseUrl || ''
       },
       body: JSON.stringify({
         prompt,
@@ -339,11 +339,13 @@ const sendMessage = async () => {
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      const errorText = await response.text()
+      console.error('Failed to start task:', response.status, errorText)
+      throw new Error(`HTTP error! status: ${response.status}, details: ${errorText}`)
     }
 
     const data = await response.json()
-    console.log('Task started:', data)
+    console.log('Task started successfully:', data)
 
     // Update AI message with task ID
     if (data.task_id) {
