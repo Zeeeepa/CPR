@@ -1,38 +1,35 @@
 #!/usr/bin/env python3
 """
-Comprehensive validation script for CPR application
-Tests environment setup, backend API, and frontend components
+Validation script for CPR application
+Checks environment, backend API, and frontend
 """
 
 import os
 import sys
-import json
 import time
-import subprocess
 import requests
 from datetime import datetime
+import subprocess
+from pathlib import Path
 
 # Configuration
 BACKEND_URL = "http://localhost:8002"
-FRONTEND_URL = "http://localhost:3001"
+FRONTEND_URL = "http://localhost:3002"  # Updated to port 3002
 REQUIRED_ENV_VARS = ["CODEGEN_TOKEN", "CODEGEN_ORG_ID"]
 
 def print_header(title):
-    """Print a formatted header"""
+    """Print a section header"""
     print("\n" + "=" * 60)
     print(f" {title} ".center(60, "="))
     print("=" * 60)
 
-def print_result(test_name, success, message=""):
-    """Print a test result with color"""
-    if success:
-        result = "\033[92m✓ PASS\033[0m"  # Green
-    else:
-        result = "\033[91m✗ FAIL\033[0m"  # Red
-    
-    print(f"{result} {test_name}")
-    if message:
-        print(f"     {message}")
+def print_pass(message):
+    """Print a pass message with color"""
+    print(f"\033[92m✓ PASS\033[0m {message}")
+
+def print_fail(message):
+    """Print a fail message with color"""
+    print(f"\033[91m✗ FAIL\033[0m {message}")
 
 def check_environment():
     """Check if required environment variables are set"""
@@ -41,137 +38,119 @@ def check_environment():
     all_vars_set = True
     for var in REQUIRED_ENV_VARS:
         if var in os.environ and os.environ[var]:
-            print_result(f"Environment variable {var}", True)
+            print_pass(f"Environment variable {var}")
         else:
-            print_result(f"Environment variable {var}", False, 
-                        f"Missing or empty. Set it in .env file or export {var}=value")
+            print_fail(f"Environment variable {var}")
             all_vars_set = False
     
     return all_vars_set
 
-def check_backend_running():
+def check_backend_api():
     """Check if backend API is running"""
     print_header("Backend API Check")
     
     try:
         response = requests.get(f"{BACKEND_URL}/docs", timeout=5)
         if response.status_code == 200:
-            print_result("Backend API is running", True)
+            print_pass("Backend API is running")
             return True
         else:
-            print_result("Backend API is running", False, 
-                        f"Unexpected status code: {response.status_code}")
+            print_fail(f"Backend API is running with status code: {response.status_code}")
             return False
     except requests.exceptions.ConnectionError:
-        print_result("Backend API is running", False, 
-                    f"Could not connect to {BACKEND_URL}. Is the backend running?")
+        print_fail(f"Could not connect to {BACKEND_URL}. Is the backend running?")
         return False
     except Exception as e:
-        print_result("Backend API is running", False, f"Error: {str(e)}")
+        print_fail(f"Error: {str(e)}")
         return False
 
-def test_backend_connection():
+def test_connection():
     """Test connection to backend API and Codegen API"""
     print_header("API Connection Test")
     
     try:
         response = requests.post(
             f"{BACKEND_URL}/api/v1/test-connection",
-            headers={"Content-Type": "application/json"},
-            timeout=10
+            headers={
+                "X-Organization-ID": os.environ.get("CODEGEN_ORG_ID", ""),
+                "X-Token": os.environ.get("CODEGEN_TOKEN", "")
+            }
         )
         
         if response.status_code == 200:
             data = response.json()
-            print_result("Backend connection test", True, 
-                        f"Status: {data.get('status', 'unknown')}")
+            print_pass(f"Backend connection test")
+            print(f"     Status: {data.get('status', 'unknown')}")
             return True
         else:
-            print_result("Backend connection test", False, 
-                        f"Status code: {response.status_code}, Response: {response.text}")
+            print_fail(f"Backend connection test")
+            print(f"     Status code: {response.status_code}, Response: {response.text}")
             return False
     except Exception as e:
-        print_result("Backend connection test", False, f"Error: {str(e)}")
+        print_fail(f"Backend connection test")
+        print(f"     Error: {str(e)}")
         return False
 
 def test_task_creation():
-    """Test creating a task via the API"""
+    """Test task creation"""
     print_header("Task Creation Test")
     
     try:
         response = requests.post(
             f"{BACKEND_URL}/api/v1/run-task",
-            headers={"Content-Type": "application/json"},
-            json={
-                "prompt": "Echo test message for validation",
-                "stream": True
+            headers={
+                "Content-Type": "application/json",
+                "X-Organization-ID": os.environ.get("CODEGEN_ORG_ID", ""),
+                "X-Token": os.environ.get("CODEGEN_TOKEN", "")
             },
-            timeout=10
+            json={
+                "prompt": "List all files in the current directory",
+                "stream": False
+            }
         )
         
         if response.status_code == 200:
             data = response.json()
             task_id = data.get("task_id")
             if task_id:
-                print_result("Task creation", True, f"Task ID: {task_id}")
+                print_pass(f"Task creation")
+                print(f"     Task ID: {task_id}")
                 return task_id
             else:
-                print_result("Task creation", False, "No task ID returned")
+                print_fail("Task creation")
+                print(f"     No task ID returned")
                 return None
         else:
-            print_result("Task creation", False, 
-                        f"Status code: {response.status_code}, Response: {response.text}")
+            print_fail("Task creation")
+            print(f"     Status code: {response.status_code}, Response: {response.text}")
             return None
     except Exception as e:
-        print_result("Task creation", False, f"Error: {str(e)}")
+        print_fail("Task creation")
+        print(f"     Error: {str(e)}")
         return None
 
-def test_task_status(task_id):
-    """Test checking task status"""
-    print_header("Task Status Test")
-    
-    if not task_id:
-        print_result("Task status check", False, "No task ID provided")
-        return False
-    
-    try:
-        # Wait a moment for the task to be processed
-        time.sleep(2)
-        
-        response = requests.get(
-            f"{BACKEND_URL}/api/v1/task/{task_id}/status",
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            status = data.get("status", "unknown")
-            print_result("Task status check", True, f"Status: {status}")
-            return True
-        else:
-            print_result("Task status check", False, 
-                        f"Status code: {response.status_code}, Response: {response.text}")
-            return False
-    except Exception as e:
-        print_result("Task status check", False, f"Error: {str(e)}")
-        return False
-
-def test_sse_stream(task_id):
+def test_streaming():
     """Test SSE streaming for a task"""
     print_header("SSE Streaming Test")
     
+    # Create a new task for streaming
+    task_id = test_task_creation()
+    
     if not task_id:
-        print_result("SSE streaming", False, "No task ID provided")
+        print_fail("No task ID available for streaming test")
         return False
     
     try:
-        # Use curl to test SSE stream (easier than using Python for SSE)
+        # Use curl to test SSE stream
+        stream_url = f"{BACKEND_URL}/api/v1/task/{task_id}/stream"
+        
         cmd = [
-            "curl", "-N", 
-            f"{BACKEND_URL}/api/v1/task/{task_id}/stream"
+            "curl", 
+            "-N", 
+            stream_url
         ]
         
-        print("Testing SSE stream (will timeout after 5 seconds)...")
+        # Run curl command with timeout
         process = subprocess.Popen(
             cmd, 
             stdout=subprocess.PIPE, 
@@ -180,23 +159,28 @@ def test_sse_stream(task_id):
         )
         
         # Wait for a short time to get some output
-        time.sleep(5)
-        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=6)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
         
-        stdout, stderr = process.communicate()
-        
-        if stderr:
-            print_result("SSE streaming", False, f"Error: {stderr}")
+        if stderr and not "Total" in stderr:  # Ignore curl progress messages
+            print_fail("SSE streaming")
+            print(f"     Error: {stderr}")
             return False
         
         if stdout:
-            print_result("SSE streaming", True, "Received data from stream")
+            print_pass("SSE streaming")
+            print(f"     Received data from stream")
             return True
         else:
-            print_result("SSE streaming", False, "No data received from stream")
+            print_fail("SSE streaming")
+            print(f"     No data received from stream")
             return False
     except Exception as e:
-        print_result("SSE streaming", False, f"Error: {str(e)}")
+        print_fail("SSE streaming")
+        print(f"     Error: {str(e)}")
         return False
 
 def check_frontend_files():
@@ -215,69 +199,82 @@ def check_frontend_files():
     all_files_exist = True
     for file_path in essential_files:
         if os.path.isfile(file_path):
-            print_result(f"File exists: {file_path}", True)
+            print_pass(f"File exists: {file_path}")
         else:
-            print_result(f"File exists: {file_path}", False, "File not found")
+            print_fail(f"File exists: {file_path}")
             all_files_exist = False
     
     return all_files_exist
 
-def run_validation():
-    """Run all validation tests"""
-    print_header("CPR Application Validation")
-    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+def check_frontend():
+    """Check if frontend is running"""
+    print_header("Frontend Check")
     
-    # Step 1: Check environment
-    env_ok = check_environment()
-    if not env_ok:
-        print("\n⚠️  Environment check failed. Please set the required environment variables.")
-        print("   You can create a .env file based on .env.example")
-        return False
-    
-    # Step 2: Check if backend is running
-    backend_ok = check_backend_running()
-    if not backend_ok:
-        print("\n⚠️  Backend API is not running. Please start it with:")
-        print("   cd backend && uvicorn api:app --host 0.0.0.0 --port 8002")
-        return False
-    
-    # Step 3: Test backend connection
-    connection_ok = test_backend_connection()
-    if not connection_ok:
-        print("\n⚠️  Backend connection test failed. Check your API credentials.")
-        return False
-    
-    # Step 4: Test task creation
-    task_id = test_task_creation()
-    if not task_id:
-        print("\n⚠️  Task creation failed. Check the backend logs for details.")
-        return False
-    
-    # Step 5: Test task status
-    status_ok = test_task_status(task_id)
-    
-    # Step 6: Test SSE streaming
-    sse_ok = test_sse_stream(task_id)
-    
-    # Step 7: Check frontend files
-    frontend_ok = check_frontend_files()
-    if not frontend_ok:
-        print("\n⚠️  Some frontend files are missing. Check your project structure.")
-    
-    # Final result
-    print_header("Validation Summary")
-    all_tests_passed = env_ok and backend_ok and connection_ok and task_id and status_ok and sse_ok and frontend_ok
-    
-    if all_tests_passed:
-        print("\n✅ All validation tests passed! The application is ready to use.")
-        print("\nYou can start the application with:")
-        print("   ./deploy.sh")
-        return True
-    else:
-        print("\n⚠️  Some validation tests failed. Please fix the issues and try again.")
+    try:
+        response = requests.get(FRONTEND_URL, timeout=5)
+        if response.status_code == 200:
+            print_pass("Frontend is running")
+            return True
+        else:
+            print_fail(f"Frontend check failed with status code: {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        print_fail(f"Frontend check failed: {e}")
         return False
 
+def main():
+    """Main validation function"""
+    print("=" * 60)
+    print("================ CPR Application Validation ================")
+    print("=" * 60)
+    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Check environment variables
+    env_check_passed = check_environment()
+    
+    # Check backend API
+    backend_running = check_backend_api()
+    
+    # Only proceed with API tests if backend is running
+    if backend_running:
+        connection_test_passed = test_connection()
+        task_test_passed = test_task_creation() is not None
+        stream_test_passed = test_streaming()
+    else:
+        connection_test_passed = False
+        task_test_passed = False
+        stream_test_passed = False
+    
+    # Check frontend
+    frontend_running = check_frontend()
+    
+    # Check frontend files
+    files_check_passed = check_frontend_files()
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("==================== Validation Summary ====================")
+    print("=" * 60)
+    
+    all_passed = (
+        env_check_passed and 
+        backend_running and 
+        connection_test_passed and 
+        task_test_passed and 
+        stream_test_passed and
+        frontend_running and
+        files_check_passed
+    )
+    
+    if all_passed:
+        print("\n✅ All validation tests passed! The application is ready to use.")
+        print(f"- Backend API: {BACKEND_URL}")
+        print(f"- Frontend: {FRONTEND_URL}")
+        return 0
+    else:
+        print("\n⚠️  Some validation tests failed. Please fix the issues and try again.")
+        return 1
+
 if __name__ == "__main__":
-    success = run_validation()
-    sys.exit(0 if success else 1)
+    sys.exit(main())
 

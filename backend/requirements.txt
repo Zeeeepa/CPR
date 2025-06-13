@@ -1,8 +1,7 @@
 fastapi>=0.115.3
 uvicorn>=0.24.0
-codegen>=0.55.7  # Latest version of the Codegen SDK
-python-dotenv>=1.0.1  # Updated to match codegen's requirement
-pydantic>=2.6.1  # Compatible with codegen's pydantic-core requirement
-sseclient-py>=1.7.2  # For testing SSE streaming
-requests>=2.31.0  # For making HTTP requests
+codegen>=0.55.7
+python-dotenv>=1.0.1
+pydantic>=2.6.1
+requests>=2.31.0
 

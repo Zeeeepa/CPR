@@ -1,225 +1,127 @@
-# CPR (Codegen PR) - AI Agent Chat Interface
+# CPR - Codegen PR
 
-A modern, real-time chat interface for interacting with Codegen AI agents. Built with Nuxt 3, Vue 3, and FastAPI.
+A chat interface for interacting with Codegen AI agents.
 
-## 🚀 Features
+## Features
 
-- **Real-time Chat Interface**: Interactive chat with AI agents
-- **Dynamic Progress Tracking**: Live updates on task execution steps
-- **Connection Status Monitoring**: Real-time connection status indicators
-- **Thread Management**: Create and manage multiple conversation threads
-- **Modern UI**: Dark theme with Tailwind CSS and Heroicons
-- **API Integration**: Full integration with Codegen SDK
-- **Enhanced Agent State Retrieval**: Properly retrieves and displays agent state and responses
-- **Robust Error Handling**: Comprehensive error handling and recovery mechanisms
-- **Improved Streaming**: Better SSE streaming implementation for real-time updates
+- Real-time chat interface with Codegen AI agents
+- Streaming responses with progress indicators
+- Settings management for API credentials
+- Mock mode for testing without actual Codegen API credentials
+- Responsive design for desktop and mobile
 
-## 🏗️ Architecture
+## Architecture
 
-- **Frontend**: Nuxt 3 + Vue 3 + TypeScript + Tailwind CSS
-- **Backend**: FastAPI + Python + Codegen SDK
-- **Real-time Updates**: Server-Sent Events (SSE) for live progress
-- **State Management**: Vue 3 Composition API with reactive state
+- **Frontend**: Nuxt 3 + Vue 3 application
+- **Backend**: FastAPI Python server
+- **Integration**: Codegen SDK for AI agent interactions
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Node.js 18+ and npm
-- Python 3.8+ and pip
-- Codegen API credentials (token and org ID)
+- Python 3.9+
+- Codegen API credentials (organization ID and token)
 
-## 🛠️ Setup
+## Installation
 
-### 1. Clone and Install Dependencies
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Zeeeepa/CPR.git
+   cd CPR
+   ```
 
-```bash
-# Install frontend dependencies
-npm install
+2. Install frontend dependencies:
+   ```bash
+   npm install
+   ```
 
-# Install backend dependencies
-cd backend && pip install -r requirements.txt && cd ..
-```
+3. Install backend dependencies:
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   cd ..
+   ```
 
-### 2. Environment Configuration
+4. Set up environment variables:
+   ```bash
+   export CODEGEN_ORG_ID=your_organization_id
+   export CODEGEN_TOKEN=your_api_token
+   ```
 
-Copy the environment template and add your credentials:
+## Running the Application
 
-```bash
-cp .env.example .env
-```
+### Using the Deployment Script
 
-Edit `.env` with your actual Codegen credentials:
-
-```env
-CODEGEN_TOKEN=sk-your-actual-token
-CODEGEN_ORG_ID=your-actual-org-id
-```
-
-### 3. Validation (Recommended)
-
-Run the comprehensive validation script to ensure everything is set up correctly:
-
-```bash
-python validate_ui.py
-```
-
-This will validate:
-- ✅ Environment setup
-- ✅ Frontend build process
-- ✅ Backend API structure
-- ✅ UI components
-- ✅ Configuration files
-- ✅ Styling setup
-- ✅ Agent state retrieval
-- ✅ SSE streaming functionality
-
-## 🚀 Quick Start
-
-### Option 1: Use the Deployment Script (Recommended)
+The easiest way to run the application is using the deployment script:
 
 ```bash
 ./deploy.sh
 ```
 
 This will:
-- Install all dependencies
-- Validate the environment and setup
-- Start the backend API on port 8002
-- Start the frontend on port 3001
-- Display access URLs
+1. Check environment variables
+2. Start the backend server
+3. Start the frontend server
+4. Run validation tests
+5. Display URLs for accessing the application
 
-### Option 2: Manual Start
+### Manual Startup
 
-Start the backend API:
+If you prefer to start the servers manually:
 
-```bash
-cd backend
-uvicorn api:app --host 0.0.0.0 --port 8002 --reload
-```
+1. Start the backend server:
+   ```bash
+   cd backend
+   python -m uvicorn api:app --host 0.0.0.0 --port 8002
+   ```
 
-In a new terminal, start the frontend:
+2. In a separate terminal, start the frontend server:
+   ```bash
+   npm run dev
+   ```
 
-```bash
-npm run dev
-```
+3. Access the application at:
+   - Frontend: http://localhost:3002
+   - Backend API: http://localhost:8002
 
-## 🌐 Access Points
+## Testing
 
-- **Frontend**: http://localhost:3001
-- **Backend API**: http://localhost:8002
-- **API Documentation**: http://localhost:8002/docs
+Run the validation script to verify that everything is working correctly:
 
-## 🧪 Testing
-
-### UI Validation
 ```bash
 python validate_ui.py
 ```
 
-### Streaming Test
+For testing the backend API directly:
+
 ```bash
 python test_request.py
 ```
 
-### Manual Testing Checklist
+## Mock Mode
 
-1. **Connection Test**: Verify connection status shows "Connected" with valid credentials
-2. **Thread Creation**: Create new threads and verify they appear in sidebar
-3. **Message Flow**: Send messages and verify real-time progress updates
-4. **Error Handling**: Test with invalid credentials to verify error states
-5. **UI Responsiveness**: Test on different screen sizes
-6. **Agent State**: Verify that agent state is properly retrieved and displayed
-7. **Response Display**: Check that agent responses are correctly formatted and displayed
+The application supports a mock mode for testing without actual Codegen API credentials. This is enabled by default in the backend server.
 
-## 📁 Project Structure
+To disable mock mode and use real Codegen API credentials, set `MOCK_MODE = False` in `backend/api.py`.
 
-```
-├── components/           # Vue components
-│   ├── ChatMessage.vue  # Chat message display
-│   └── SettingsModal.vue # Settings configuration
-├── pages/
-│   └── index.vue        # Main chat interface
-├── backend/
-│   ├── api.py          # FastAPI backend server
-│   └── requirements.txt # Python dependencies
-├── assets/             # CSS and static assets
-├── public/             # Public static files
-├── .env.example        # Environment template
-├── validate_ui.py      # UI validation script
-├── test_request.py     # Streaming test script
-└── deploy.sh          # Deployment script
-```
+## Stopping the Application
 
-## 🔧 Development
-
-### Frontend Development
+To stop all running servers:
 
 ```bash
-npm run dev          # Start development server
-npm run build        # Build for production
-npm run preview      # Preview production build
+./stop.sh
 ```
 
-### Backend Development
+## API Endpoints
 
-```bash
-cd backend
-uvicorn api:app --reload  # Start with auto-reload
-```
+- `POST /api/v1/run-task`: Run a task with the Codegen API
+- `GET /api/v1/task/{task_id}/stream`: Stream task updates
+- `GET /api/v1/task/{task_id}/status`: Get task status
+- `POST /api/v1/test-connection`: Test connection to the Codegen API
+- `GET /api/v1/config`: Get current configuration
+- `GET /api/v1/tasks`: List all active tasks
 
-### Code Quality
+## License
 
-The project includes:
-- TypeScript for type safety
-- ESLint for code linting
-- Prettier for code formatting
-- Tailwind CSS for consistent styling
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **Connection Failed**: Check your CODEGEN_TOKEN and CODEGEN_ORG_ID in .env
-2. **Port Conflicts**: Ensure ports 3001 and 8002 are available
-3. **Build Errors**: Run `npm install` to ensure all dependencies are installed
-4. **Backend Errors**: Check that Python dependencies are installed with `pip install -r backend/requirements.txt`
-5. **Agent State Issues**: If agent state is not being retrieved properly, check the backend logs for errors
-
-### Debug Mode
-
-Start the backend with debug logging:
-
-```bash
-cd backend
-LOG_LEVEL=debug uvicorn api:app --reload
-```
-
-## 📚 API Documentation
-
-The backend provides a comprehensive API with the following endpoints:
-
-- `POST /api/v1/run-task` - Execute AI agent tasks
-- `POST /api/v1/test-connection` - Test API connection
-- `GET /api/v1/tasks` - List active tasks
-- `GET /api/v1/task/{task_id}/status` - Get task status
-- `GET /api/v1/task/{task_id}/stream` - Stream task updates
-- `GET /docs` - Interactive API documentation
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Run validation tests: `python validate_ui.py`
-4. Submit a pull request
-
-## 📄 License
-
-This project is part of the Codegen ecosystem. See the main Codegen repository for license information.
-
-## 🆘 Support
-
-For issues and support:
-1. Check the troubleshooting section above
-2. Run the validation script: `python validate_ui.py`
-3. Check the API documentation at http://localhost:8002/docs
-4. Review the VALIDATION_CHECKLIST.md for detailed testing steps
+MIT
 

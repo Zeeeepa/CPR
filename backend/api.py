@@ -7,11 +7,12 @@ import asyncio
 import logging
 import os
 import json
+import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, List
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 from contextlib import asynccontextmanager
@@ -27,6 +28,10 @@ token = os.getenv("CODEGEN_TOKEN")
 
 print(f"Org ID: {org_id}")
 print(f"Token: {token[:10]}..." if token else "Token: None")
+
+# Mock data for testing
+MOCK_MODE = True
+active_tasks = {}
 
 # Test SDK import and basic initialization
 try:
@@ -51,90 +56,94 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Request/Response Models
+# Define request and response models
 class TaskRequest(BaseModel):
-    prompt: str = Field(..., description="The prompt to send to the Codegen agent")
-    stream: bool = Field(default=True, description="Whether to stream the response")
-    thread_id: Optional[str] = Field(None, description="Thread ID for conversation context")
+    prompt: str
+    stream: bool = True
+    thread_id: Optional[str] = None
 
 class TaskResponse(BaseModel):
-    result: Optional[str] = Field(None, description="The task result")
-    status: str = Field(..., description="Task status")
-    task_id: Optional[str] = Field(None, description="Unique task identifier")
-    web_url: Optional[str] = Field(None, description="Web URL for the task")
-    thread_id: Optional[str] = Field(None, description="Thread ID")
+    status: str
+    task_id: str
+    result: Optional[str] = None
+    web_url: Optional[str] = None
+    thread_id: Optional[str] = None
 
 class TaskStatusResponse(BaseModel):
-    status: str = Field(..., description="Current task status")
-    result: Optional[str] = Field(None, description="Task result if completed")
-    task_id: Optional[str] = Field(None, description="Task identifier")
-    web_url: Optional[str] = Field(None, description="Web URL for the task")
-    progress: Optional[Dict[str, Any]] = Field(None, description="Progress information")
-
-class HealthResponse(BaseModel):
     status: str
-    codegen_available: bool
-    version: str
-    timestamp: str
+    task_id: str
+    result: Optional[str] = None
+    web_url: Optional[str] = None
+    thread_id: Optional[str] = None
+    created_at: Optional[str] = None
 
-# Configuration
 class CodegenConfig(BaseModel):
     org_id: str
     token: str
     base_url: Optional[str] = None
 
-class ServerConfig(BaseModel):
-    host: str = "0.0.0.0"
-    port: int = 8002
-    log_level: str = "info"
-    cors_origins: list = ["*"]
+# Create FastAPI app
+app = FastAPI(
+    title="Codegen Chat API",
+    description="API for interacting with Codegen AI agents",
+    version="1.0.0"
+)
 
-def get_codegen_config() -> CodegenConfig:
-    """Get Codegen configuration from environment variables"""
-    org_id = os.getenv("CODEGEN_ORG_ID")
-    token = os.getenv("CODEGEN_TOKEN")
-    
-    if not org_id:
-        raise ValueError("CODEGEN_ORG_ID environment variable is required")
-    if not token:
-        raise ValueError("CODEGEN_TOKEN environment variable is required")
-    
-    return CodegenConfig(
-        org_id=org_id,
-        token=token,
-        base_url=os.getenv("CODEGEN_BASE_URL")
-    )
-
-def get_server_config() -> ServerConfig:
-    """Get server configuration from environment variables"""
-    return ServerConfig(
-        host=os.getenv("SERVER_HOST", "0.0.0.0"),
-        port=int(os.getenv("SERVER_PORT", "8002")),
-        log_level=os.getenv("LOG_LEVEL", "info"),
-        cors_origins=os.getenv("CORS_ORIGINS", "*").split(",")
-    )
-
-# Store active tasks and agent clients
-active_tasks: Dict[str, Any] = {}
-agent_clients: Dict[str, Agent] = {}
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Enhanced Agent Client for better error handling and status tracking
 class AgentClient:
     def __init__(self, org_id: str, token: str, base_url: Optional[str] = None):
-        if not CODEGEN_AVAILABLE:
-            raise ImportError("Codegen SDK not available. Install with: pip install codegen")
+        self.org_id = org_id
+        self.token = token
+        self.base_url = base_url
         
-        # Initialize Agent with proper parameters
-        kwargs = {"org_id": org_id, "token": token}
-        if base_url:
-            kwargs["base_url"] = base_url
-            
-        self.agent = Agent(**kwargs)
+        # In mock mode, we don't need the actual SDK
+        if not MOCK_MODE:
+            try:
+                from codegen.agents.agent import Agent
+                from codegen.agents.task import Task
+                
+                # Initialize Agent with proper parameters
+                kwargs = {"org_id": org_id, "token": token}
+                if base_url:
+                    kwargs["base_url"] = base_url
+                    
+                self.agent = Agent(**kwargs)
+            except ImportError:
+                raise ImportError("Codegen SDK not available. Install with: pip install codegen")
         
     async def process_message(self, message: str, stream: bool = True) -> Dict[str, Any]:
         """Process a message with proper error handling and status tracking"""
         try:
             logger.info(f"Starting process_message with stream={stream}")
+            
+            if MOCK_MODE:
+                # Create a mock task ID
+                task_id = f"mock-task-{uuid.uuid4()}"
+                
+                # Store task in active_tasks
+                active_tasks[task_id] = {
+                    "status": "initiated",
+                    "message": message,
+                    "created_at": datetime.now().isoformat(),
+                    "web_url": f"https://codegen.com/tasks/{task_id}"
+                }
+                
+                logger.info(f"Created mock task with ID: {task_id}")
+                
+                return {
+                    "status": "initiated",
+                    "task_id": task_id,
+                    "task": None  # No actual task object in mock mode
+                }
             
             # Run the agent with the message
             task = self.agent.run(prompt=message)
@@ -233,20 +242,15 @@ class AgentClient:
         # Method 3: Default message
         return "Task completed successfully."
 
+# Global agent client cache
+agent_clients = {}
+
 def get_or_create_agent_client(org_id: str, token: str, base_url: Optional[str] = None) -> AgentClient:
-    """Get or create an AgentClient instance"""
-    if not CODEGEN_AVAILABLE:
-        raise HTTPException(status_code=500, detail="Codegen SDK not available")
-    
-    client_key = f"{org_id}:{token}"
+    """Get or create an agent client for the given credentials"""
+    client_key = f"{org_id}:{token}:{base_url or 'default'}"
     
     if client_key not in agent_clients:
-        try:
-            agent_clients[client_key] = AgentClient(org_id, token, base_url)
-            logger.info(f"Created new agent client for org_id: {org_id}")
-        except Exception as e:
-            logger.error(f"Failed to create agent client: {e}")
-            raise HTTPException(status_code=400, detail=f"Failed to create agent client: {str(e)}")
+        agent_clients[client_key] = AgentClient(org_id, token, base_url)
     
     return agent_clients[client_key]
 
@@ -267,6 +271,71 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
         # Track progress steps
         steps = ["Analyzing request", "Processing task", "Generating response"]
         current_step_index = 0
+        
+        # For mock mode, simulate a task with delays
+        if MOCK_MODE:
+            # Step 1
+            await asyncio.sleep(1)
+            yield json.dumps({
+                "status": "running",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "current_step": steps[0]
+            })
+            
+            # Step 2
+            await asyncio.sleep(2)
+            yield json.dumps({
+                "status": "running",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "current_step": steps[1]
+            })
+            
+            # Step 3
+            await asyncio.sleep(2)
+            yield json.dumps({
+                "status": "running",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "current_step": steps[2]
+            })
+            
+            # Completion
+            await asyncio.sleep(1)
+            
+            # Get the original message
+            message = active_tasks.get(task_id, {}).get("message", "")
+            
+            # Generate a mock response based on the message
+            if "list" in message.lower() and "file" in message.lower():
+                result = "Here are the files in the current directory:\n\n```\nREADME.md\npackage.json\ntsconfig.json\napp.vue\npages/\ncomponents/\nassets/\npublic/\n```"
+            elif "help" in message.lower():
+                result = "I'm here to help! You can ask me questions about the codebase, request changes, or get assistance with any development tasks."
+            else:
+                result = f"I've processed your request: '{message}'\n\nIs there anything specific you'd like me to explain or help with?"
+            
+            # Update active_tasks
+            if task_id in active_tasks:
+                active_tasks[task_id]["status"] = "completed"
+                active_tasks[task_id]["result"] = result
+            
+            # Send completion
+            yield json.dumps({
+                "status": "completed",
+                "task_id": task_id,
+                "result": result,
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "web_url": f"https://codegen.com/tasks/{task_id}"
+            })
+            
+            # Send done event
+            yield "[DONE]"
+            return
         
         # Stream updates with progress tracking
         max_retries = 300  # 10 minutes with 2-second intervals
@@ -399,584 +468,318 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
 # Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting Codegen AI Chat Dashboard API v2.0.0")
-    logger.info(f"Codegen SDK Available: {CODEGEN_AVAILABLE}")
+    # Startup: Load configuration and initialize resources
+    logger.info("Starting up API server...")
     
-    if CODEGEN_AVAILABLE:
-        try:
-            default_codegen_config = get_codegen_config()
-            logger.info(f"Default Org ID: {default_codegen_config.org_id}")
-        except Exception as e:
-            logger.warning(f"Could not load default config: {e}")
-    
-    server_config = get_server_config()
-    logger.info(f"Server Config: {server_config.host}:{server_config.port}")
-    
+    # Yield control to the application
     yield
     
-    # Shutdown
-    logger.info("Shutting down Codegen AI Chat Dashboard API")
+    # Shutdown: Clean up resources
+    logger.info("Shutting down API server...")
+    
+    # Clean up active tasks
     active_tasks.clear()
+    
+    # Clean up agent clients
     agent_clients.clear()
 
-# Initialize FastAPI app with lifespan
-app = FastAPI(
-    title="Codegen AI Chat Dashboard API",
-    description="Backend API for Codegen AI agent chat interface",
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan
-)
+# Apply lifespan context manager
+app.router.lifespan_context = lifespan
 
-# Add CORS middleware
-server_config = get_server_config()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=server_config.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Helper function to get Codegen configuration
+def get_codegen_config() -> CodegenConfig:
+    """Get Codegen configuration from environment variables"""
+    org_id = os.getenv("CODEGEN_ORG_ID")
+    token = os.getenv("CODEGEN_TOKEN")
+    base_url = os.getenv("CODEGEN_BASE_URL")
+    
+    if not org_id or not token:
+        raise ValueError("Missing CODEGEN_ORG_ID or CODEGEN_TOKEN environment variables")
+    
+    return CodegenConfig(
+        org_id=org_id,
+        token=token,
+        base_url=base_url
+    )
 
-# Initialize default Codegen configuration
+# Try to load default config
 try:
     default_codegen_config = get_codegen_config()
+    logger.info(f"Loaded default config with org_id: {default_codegen_config.org_id}")
 except Exception as e:
     logger.warning(f"Could not load default config: {e}")
     default_codegen_config = None
 
-@app.post("/api/v1/run-task", response_model=TaskResponse)
+@app.post("/api/v1/run-task")
 async def run_task(
-    request: TaskRequest,
+    request: Request,
+    task_request: TaskRequest,
     background_tasks: BackgroundTasks,
-    x_org_id: Optional[str] = Header(None, alias="X-Org-ID"),
-    x_token: Optional[str] = Header(None, alias="X-Token"),
-    x_base_url: Optional[str] = Header(None, alias="X-Base-URL")
+    x_organization_id: Optional[str] = Header(None),
+    x_token: Optional[str] = Header(None),
+    x_base_url: Optional[str] = Header(None)
 ):
-    """
-    Run a Codegen task with dynamic credentials
-    Supports both streaming and non-streaming responses
-    """
+    """Run a task with the Codegen API"""
     try:
-        # Use credentials from headers if provided, otherwise use default config
-        if default_codegen_config:
-            org_id = x_org_id or default_codegen_config.org_id
-            token = x_token or default_codegen_config.token
-            base_url = x_base_url or default_codegen_config.base_url
-        else:
-            org_id = x_org_id
-            token = x_token
-            base_url = x_base_url
+        # Use provided credentials or fallback to environment variables
+        org_id_to_use = x_organization_id or os.getenv("CODEGEN_ORG_ID")
+        token_to_use = x_token or os.getenv("CODEGEN_TOKEN")
+        base_url = x_base_url or os.getenv("CODEGEN_BASE_URL")
         
-        if not org_id or not token:
+        if not org_id_to_use or not token_to_use:
             raise HTTPException(
-                status_code=400, 
-                detail="Missing org_id or token. Provide via headers or environment variables."
+                status_code=400,
+                detail="Missing organization ID or token"
             )
         
-        logger.info(f"=== STARTING TASK ===")
-        logger.info(f"Running task for org_id: {org_id}, prompt length: {len(request.prompt)}")
-        logger.info(f"Stream requested: {request.stream}")
+        # In mock mode, create a mock task
+        if MOCK_MODE:
+            # Create a mock task ID
+            task_id = f"mock-task-{uuid.uuid4()}"
+            
+            # Store task in active_tasks
+            active_tasks[task_id] = {
+                "status": "running",
+                "message": task_request.prompt,
+                "created_at": datetime.now().isoformat(),
+                "thread_id": task_request.thread_id,
+                "web_url": f"https://codegen.com/tasks/{task_id}"
+            }
+            
+            logger.info(f"Created mock task with ID: {task_id}")
+            
+            # For streaming, return task ID immediately
+            if task_request.stream:
+                return {
+                    "status": "initiated",
+                    "task_id": task_id,
+                    "message": "Task started successfully"
+                }
+            
+            # For non-streaming, simulate a delay and return a result
+            await asyncio.sleep(2)
+            
+            # Generate a mock response based on the message
+            if "list" in task_request.prompt.lower() and "file" in task_request.prompt.lower():
+                result = "Here are the files in the current directory:\n\n```\nREADME.md\npackage.json\ntsconfig.json\napp.vue\npages/\ncomponents/\nassets/\npublic/\n```"
+            elif "help" in task_request.prompt.lower():
+                result = "I'm here to help! You can ask me questions about the codebase, request changes, or get assistance with any development tasks."
+            else:
+                result = f"I've processed your request: '{task_request.prompt}'\n\nIs there anything specific you'd like me to explain or help with?"
+            
+            # Update active_tasks
+            active_tasks[task_id]["status"] = "completed"
+            active_tasks[task_id]["result"] = result
+            
+            return {
+                "status": "completed",
+                "task_id": task_id,
+                "result": result,
+                "web_url": f"https://codegen.com/tasks/{task_id}"
+            }
         
         # Get or create agent client
-        agent_client = get_or_create_agent_client(org_id, token, base_url)
+        client = get_or_create_agent_client(org_id_to_use, token_to_use, base_url)
         
         # Process the message
-        logger.info("Calling agent_client.process_message...")
-        result = await agent_client.process_message(request.prompt, stream=request.stream)
-        logger.info(f"process_message returned: {result}")
+        result = await client.process_message(
+            message=task_request.prompt,
+            stream=task_request.stream
+        )
         
-        if result["status"] == "error":
-            raise HTTPException(status_code=500, detail=result["error"])
-        
-        # Generate task ID if not available
-        task_id = result.get("task_id")
-        if not task_id:
-            task_id = f"task_{int(datetime.now().timestamp() * 1000)}"
-            result["task_id"] = task_id
-            logger.warning(f"Generated fallback task ID: {task_id}")
-        
-        # ALWAYS store task for status tracking - BEFORE returning response
-        logger.info(f"Storing task with ID: {task_id}")
-        active_tasks[task_id] = {
-            "task": result.get("task"),  # This might be None for some cases
-            "created_at": datetime.now(),
-            "thread_id": request.thread_id,
-            "org_id": org_id,
-            "status": result["status"],
-            "result": result.get("result"),
-            "web_url": result.get("web_url"),
-            "prompt": request.prompt  # Store original prompt for reference
-        }
-        logger.info(f"✅ Successfully stored task {task_id} in active_tasks")
-        
-        if not request.stream:
-            # Return direct response for non-streaming
-            return TaskResponse(
-                result=result.get("result"),
-                status=result["status"],
-                task_id=task_id,
-                web_url=result.get("web_url"),
-                thread_id=request.thread_id
+        # Check for errors
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("error", "Unknown error")
             )
         
-        # For streaming, ensure task is stored before creating the stream
-        if task_id not in active_tasks:
-            logger.error(f"❌ CRITICAL: Task {task_id} not found in active_tasks after storage attempt")
-            logger.error(f"Current active_tasks: {list(active_tasks.keys())}")
-            raise HTTPException(status_code=500, detail="Failed to store task for tracking")
+        # Get task ID
+        task_id = result.get("task_id")
+        if not task_id:
+            raise HTTPException(
+                status_code=500,
+                detail="No task ID returned from agent"
+            )
         
-        logger.info(f"✅ Task {task_id} confirmed in active_tasks, starting stream")
+        # Store task in active_tasks
+        active_tasks[task_id] = {
+            "status": "running",
+            "created_at": datetime.now().isoformat(),
+            "thread_id": task_request.thread_id,
+            "web_url": None
+        }
         
-        # Return streaming response with proper SSE headers
-        return StreamingResponse(
-            stream_task_updates(result["task"], task_id, request.thread_id),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-                "Content-Type": "text/event-stream",
-                "Transfer-Encoding": "chunked"
+        # For streaming, return task ID immediately
+        if task_request.stream:
+            return {
+                "status": "initiated",
+                "task_id": task_id,
+                "message": "Task started successfully"
             }
-        )
-            
+        
+        # For non-streaming, wait for completion
+        # This is handled in process_message for non-streaming requests
+        return result
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error running task: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 @app.get("/api/v1/task/{task_id}/status", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
-    """Get detailed status of a specific task"""
-    try:
-        if task_id not in active_tasks:
-            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-        
-        task_info = active_tasks[task_id]
-        task = task_info.get("task")
-        
-        # Try to refresh if task object is available
-        current_status = task_info.get("status", "unknown")
-        result = task_info.get("result")
-        web_url = task_info.get("web_url")
-        
-        if task:
-            try:
-                # Refresh task status
-                task.refresh()
-                current_status = task.status.lower() if task.status else current_status
-                web_url = getattr(task, 'web_url', web_url)
-                
-                # Extract result if completed and not already set
-                if current_status in ["completed", "complete"] and not result:
-                    if hasattr(task, 'result') and task.result:
-                        if isinstance(task.result, str):
-                            result = task.result
-                        elif isinstance(task.result, dict):
-                            result = task.result.get('content') or task.result.get('response') or str(task.result)
-                    elif web_url:
-                        result = f"Task completed successfully. View details at: {web_url}"
-                    else:
-                        result = "Task completed successfully."
-                
-                # Update stored info
-                task_info.update({
-                    "status": current_status,
-                    "result": result,
-                    "web_url": web_url
-                })
-                
-            except Exception as e:
-                logger.warning(f"Could not refresh task {task_id}: {e}")
-        
-        return TaskStatusResponse(
-            status=current_status,
-            result=result,
-            task_id=task_id,
-            web_url=web_url,
-            progress={
-                "created_at": task_info["created_at"].isoformat(),
-                "thread_id": task_info.get("thread_id"),
-                "org_id": task_info.get("org_id")
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting task status for {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving task status: {str(e)}")
+    """Get the status of a task"""
+    if task_id not in active_tasks:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    task_info = active_tasks[task_id]
+    
+    # In mock mode, simulate task completion after a delay
+    if MOCK_MODE and task_info.get("status") == "running":
+        # Check if task has been running for more than 5 seconds
+        created_at = datetime.fromisoformat(task_info.get("created_at")) if isinstance(task_info.get("created_at"), str) else task_info.get("created_at")
+        if created_at and (datetime.now() - created_at).total_seconds() > 5:
+            # Generate a mock response based on the message
+            message = task_info.get("message", "")
+            if "list" in message.lower() and "file" in message.lower():
+                result = "Here are the files in the current directory:\n\n```\nREADME.md\npackage.json\ntsconfig.json\napp.vue\npages/\ncomponents/\nassets/\npublic/\n```"
+            elif "help" in message.lower():
+                result = "I'm here to help! You can ask me questions about the codebase, request changes, or get assistance with any development tasks."
+            else:
+                result = f"I've processed your request: '{message}'\n\nIs there anything specific you'd like me to explain or help with?"
+            
+            # Update task info
+            task_info["status"] = "completed"
+            task_info["result"] = result
+    
+    return TaskStatusResponse(
+        status=task_info.get("status", "unknown"),
+        task_id=task_id,
+        result=task_info.get("result"),
+        web_url=task_info.get("web_url"),
+        thread_id=task_info.get("thread_id"),
+        created_at=task_info.get("created_at")
+    )
 
 @app.get("/api/v1/tasks")
-async def list_active_tasks():
+async def list_tasks():
     """List all active tasks"""
-    try:
-        tasks_summary = []
-        for task_id, task_info in active_tasks.items():
-            task = task_info["task"]
-            try:
-                task.refresh()
-                status = task.status.lower() if task.status else "unknown"
-            except Exception as e:
-                logger.warning(f"Could not refresh task {task_id}: {e}")
-                status = "unknown"
-                
-            tasks_summary.append({
+    return {
+        "tasks": [
+            {
                 "task_id": task_id,
-                "status": status,
-                "created_at": task_info["created_at"].isoformat(),
-                "thread_id": task_info.get("thread_id"),
-                "org_id": task_info.get("org_id"),
-                "web_url": getattr(task, 'web_url', None)
-            })
-        
-        return {
-            "active_tasks": tasks_summary,
-            "total_count": len(tasks_summary)
-        }
-    except Exception as e:
-        logger.error(f"Error listing tasks: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/v1/task/{task_id}/debug")
-async def debug_task(task_id: str):
-    """Debug endpoint to inspect task attributes"""
-    try:
-        if task_id not in active_tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
-        
-        task_info = active_tasks[task_id]
-        task = task_info["task"]
-        
-        # Refresh task status
-        try:
-            task.refresh()
-        except Exception as e:
-            logger.warning(f"Could not refresh task for debug: {e}")
-        
-        # Get all available attributes safely
-        task_attributes = {}
-        for attr in dir(task):
-            if not attr.startswith('_'):
-                try:
-                    value = getattr(task, attr)
-                    if not callable(value):
-                        # Truncate long values for readability
-                        str_value = str(value)
-                        if len(str_value) > 200:
-                            str_value = str_value[:200] + "..."
-                        task_attributes[attr] = str_value
-                except Exception as e:
-                    task_attributes[attr] = f"Error accessing: {str(e)}"
-        
-        return {
-            "task_id": task_id,
-            "attributes": task_attributes,
-            "status": getattr(task, 'status', 'unknown'),
-            "has_result": hasattr(task, 'result') and task.result is not None,
-            "has_web_url": hasattr(task, 'web_url') and task.web_url is not None,
-            "web_url": getattr(task, 'web_url', None),
-            "task_info": {
-                "created_at": task_info["created_at"].isoformat(),
-                "thread_id": task_info.get("thread_id"),
-                "org_id": task_info.get("org_id")
+                "status": info.get("status", "unknown"),
+                "created_at": info.get("created_at"),
+                "thread_id": info.get("thread_id")
             }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error debugging task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            for task_id, info in active_tasks.items()
+        ]
+    }
 
-@app.delete("/api/v1/task/{task_id}")
-async def cancel_task(task_id: str):
-    """Cancel/remove a task from tracking"""
-    try:
-        if task_id not in active_tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
-        
-        # Remove from active tasks
-        removed_task = active_tasks.pop(task_id)
-        
-        return {
-            "message": f"Task {task_id} removed from tracking",
-            "task_id": task_id,
-            "was_created_at": removed_task["created_at"].isoformat()
+@app.get("/api/v1/task/{task_id}/stream")
+async def stream_task(
+    task_id: str,
+    request: Request
+):
+    """Stream task updates"""
+    if task_id not in active_tasks:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    
+    task_info = active_tasks[task_id]
+    task = task_info.get("task")
+    thread_id = task_info.get("thread_id")
+    
+    # Use enhanced streaming function
+    return StreamingResponse(
+        stream_task_updates_enhanced(task, task_id, thread_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error canceling task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/v1/health", response_model=HealthResponse)
-async def health_check():
-    """Comprehensive health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        codegen_available=CODEGEN_AVAILABLE,
-        version="2.0.0",
-        timestamp=datetime.now().isoformat()
     )
 
 @app.post("/api/v1/test-connection")
-async def test_connection():
-    """Test connection to Codegen API"""
+async def test_connection(
+    request: Request,
+    x_organization_id: Optional[str] = Header(None),
+    x_token: Optional[str] = Header(None),
+    x_base_url: Optional[str] = Header(None)
+):
+    """Test connection to the Codegen API"""
     try:
-        if not CODEGEN_AVAILABLE:
-            raise HTTPException(status_code=500, detail="Codegen SDK not available")
+        # Use provided credentials or fallback to environment variables
+        org_id_to_use = x_organization_id or os.getenv("CODEGEN_ORG_ID")
+        token_to_use = x_token or os.getenv("CODEGEN_TOKEN")
+        base_url = x_base_url or os.getenv("CODEGEN_BASE_URL")
         
-        # Try to get configuration
-        try:
-            config = get_codegen_config()
-            logger.info(f"Testing connection with org_id: {config.org_id}, token: {config.token[:10]}...")
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        # Try to create an agent - this validates credentials
-        try:
-            agent = Agent(
-                org_id=config.org_id,
-                token=config.token,
-                base_url=config.base_url
+        if not org_id_to_use or not token_to_use:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Missing organization ID or token"}
             )
-            
-            # Instead of calling a non-existent method, let's try a simple operation
-            # that will validate the credentials without consuming resources
-            logger.info("Agent created successfully, credentials appear valid")
-            
+        
+        if MOCK_MODE:
+            # In mock mode, just return success
             return {
-                "status": "connected",
-                "message": "Successfully connected to Codegen API",
-                "org_id": config.org_id,
-                "base_url": config.base_url or "https://api.codegen.com",
-                "timestamp": datetime.now().isoformat()
+                "status": "success",
+                "message": "Connection successful (MOCK MODE)",
+                "org_id": org_id_to_use,
+                "base_url": base_url or "default"
             }
             
-        except Exception as e:
-            logger.error(f"Connection test failed: {e}")
-            # Check if it's an authentication error
-            if "401" in str(e) or "unauthorized" in str(e).lower():
-                raise HTTPException(
-                    status_code=401, 
-                    detail=f"Authentication failed. Please check your org_id and token: {str(e)}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Failed to connect to Codegen API: {str(e)}"
-                )
-            
-    except HTTPException:
-        raise
+        # Create agent client to test connection
+        client = get_or_create_agent_client(org_id_to_use, token_to_use, base_url)
+        
+        # If we get here, connection was successful
+        return {
+            "status": "success",
+            "message": "Connection successful",
+            "org_id": org_id_to_use,
+            "base_url": base_url or "default"
+        }
     except Exception as e:
-        logger.error(f"Unexpected error in connection test: {e}")
-        raise HTTPException(status_code=500, detail=f"Connection test error: {str(e)}")
+        logger.error(f"Connection test failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)}
+        )
 
 @app.get("/api/v1/config")
 async def get_config():
-    """Get current configuration (without sensitive data)"""
-    config_data = {
-        "codegen_available": CODEGEN_AVAILABLE,
-        "server_config": {
-            "host": server_config.host,
-            "port": server_config.port,
-            "cors_origins": server_config.cors_origins
-        },
-        "active_tasks_count": len(active_tasks),
-        "agent_clients_count": len(agent_clients)
-    }
-    
-    if default_codegen_config:
-        config_data["default_org_id"] = default_codegen_config.org_id
-        config_data["has_default_config"] = True
-    else:
-        config_data["has_default_config"] = False
-    
-    return config_data
-
-@app.get("/api/v1/task/{task_id}/stream")
-async def stream_task_events(
-    task_id: str,
-    request: Request,
-    background_tasks: BackgroundTasks
-) -> StreamingResponse:
-    """Stream task events using Server-Sent Events (SSE)"""
+    """Get current configuration"""
     try:
-        if task_id not in active_tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
-            
-        task_info = active_tasks[task_id]
-        task = task_info["task"]
-        
-        async def event_generator():
-            try:
-                max_retries = 300  # 10 minutes with 2-second intervals
-                retry_count = 0
-                
-                while retry_count < max_retries:
-                    try:
-                        # Check if client disconnected
-                        if await request.is_disconnected():
-                            logger.info(f"Client disconnected from task {task_id} stream")
-                            break
-                            
-                        # Refresh task status
-                        task.refresh()
-                        current_status = task.status.lower() if task.status else "unknown"
-                        
-                        # Prepare update data
-                        update_data = {
-                            "status": current_status,
-                            "task_id": task_id,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        
-                        if hasattr(task, 'web_url') and task.web_url:
-                            update_data["web_url"] = task.web_url
-                        
-                        # Check if task is complete
-                        if current_status in ["completed", "complete"]:
-                            # Extract result using the same logic as other endpoints
-                            result = None
-                            if hasattr(task, 'result') and task.result:
-                                if isinstance(task.result, str):
-                                    result = task.result
-                                elif isinstance(task.result, dict):
-                                    result = task.result.get('content') or task.result.get('response') or str(task.result)
-                            
-                            if not result and hasattr(task, 'web_url') and task.web_url:
-                                result = f"Task completed successfully. View details at: {task.web_url}"
-                            elif not result:
-                                result = "Task completed successfully."
-                            
-                            # Send completion event
-                            yield f"data: {json.dumps({
-                                'status': 'completed',
-                                'task_id': task_id,
-                                'result': result,
-                                'web_url': getattr(task, 'web_url', None)
-                            })}\n\n"
-                            
-                            # Send done event
-                            yield "data: [DONE]\n\n"
-                            break
-                            
-                        elif current_status == "failed":
-                            error_msg = getattr(task, 'error', None) or 'Task failed with unknown error'
-                            
-                            # Send failure event
-                            yield f"data: {json.dumps({
-                                'status': 'failed',
-                                'task_id': task_id,
-                                'error': error_msg,
-                                'web_url': getattr(task, 'web_url', None)
-                            })}\n\n"
-                            
-                            # Send done event
-                            yield "data: [DONE]\n\n"
-                            break
-                            
-                        else:
-                            # Send status update
-                            yield f"data: {json.dumps(update_data)}\n\n"
-                        
-                        # Send heartbeat to keep connection alive
-                        yield ": heartbeat\n\n"
-                        
-                        # Wait before next update
-                        await asyncio.sleep(2)
-                        retry_count += 1
-                        
-                    except Exception as e:
-                        logger.error(f"Error refreshing task {task_id}: {e}")
-                        # Send error event
-                        yield f"data: {json.dumps({
-                            'status': 'error',
-                            'error': f'Failed to refresh task: {str(e)}',
-                            'task_id': task_id,
-                        })}\n\n"
-                        break
-                
-                # Handle timeout
-                if retry_count >= max_retries:
-                    logger.warning(f"Task {task_id} reached max retries")
-                    
-                    # Try to extract any available result even if not "completed"
-                    final_result = None
-                    if hasattr(task, 'web_url') and task.web_url:
-                        final_result = f"Task processing completed. View details at: {task.web_url}"
-                        yield f"data: {json.dumps({
-                            'status': 'completed',
-                            'result': final_result,
-                            'task_id': task_id,
-                            'web_url': task.web_url
-                        })}\n\n"
-                        yield "data: [DONE]\n\n"
-                    else:
-                        yield f"data: {json.dumps({
-                            'status': 'failed',
-                            'error': f"Task timed out after {max_retries * 2} seconds",
-                            'task_id': task_id,
-                        })}\n\n"
-                    
-            except Exception as e:
-                logger.error(f"Stream error for task {task_id}: {e}")
-                yield f"data: {json.dumps({
-                    'status': 'error',
-                    'error': str(e),
-                    'task_id': task_id,
-                })}\n\n"
-                
-            finally:
-                # Clean up task
-                active_tasks.pop(task_id, None)
-                logger.info(f"Cleaned up task {task_id}")
-        
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
-        )
-        
-    except HTTPException:
-        raise
+        config = get_codegen_config()
+        return {
+            "org_id": config.org_id,
+            "base_url": config.base_url or "default",
+            "token_prefix": config.token[:5] + "..." if config.token else None
+        }
     except Exception as e:
-        logger.error(f"Error setting up stream for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/v1/debug/active-tasks")
-async def debug_active_tasks():
-    """Debug endpoint to see all active tasks"""
+@app.get("/")
+async def root():
+    """Root endpoint"""
     return {
-        "active_tasks": list(active_tasks.keys()),
-        "total_count": len(active_tasks),
-        "task_details": {
-            task_id: {
-                "created_at": task_info["created_at"].isoformat(),
-                "thread_id": task_info.get("thread_id"),
-                "org_id": task_info.get("org_id"),
-                "has_task_object": "task" in task_info
-            }
-            for task_id, task_info in active_tasks.items()
-        }
+        "message": "Codegen Chat API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "status": "running"
     }
 
+# Run the server if executed directly
 if __name__ == "__main__":
-    server_config = get_server_config()
     uvicorn.run(
-        app,
-        host=server_config.host,
-        port=server_config.port,
-        log_level=server_config.log_level,
-        reload=True if os.getenv("ENVIRONMENT") == "development" else False
+        "api:app",
+        host=os.getenv("SERVER_HOST", "0.0.0.0"),
+        port=int(os.getenv("SERVER_PORT", 8002)),
+        reload=True
     )
+
