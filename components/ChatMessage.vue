@@ -57,7 +57,7 @@
       </div>
       
       <!-- Progress Steps (for AI messages) -->
-      <div v-if="message.role === 'assistant' && message.steps && !message.sent" class="mb-4">
+      <div v-if="message.role === 'assistant' && message.steps && !message.content" class="mb-4">
         <div class="space-y-2">
           <div
             v-for="step in message.steps"
