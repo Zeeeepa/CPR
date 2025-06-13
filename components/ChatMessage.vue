@@ -143,12 +143,25 @@
           ~{{ message.estimatedTime }}s remaining
         </div>
       </div>
+
+      <!-- Debug information (only in development) -->
+      <div v-if="showDebugInfo && message.role === 'assistant'" class="mt-4 pt-3 border-t border-gray-700 text-xs font-mono">
+        <div class="text-gray-400 mb-1">Debug Info:</div>
+        <div class="bg-gray-900 p-2 rounded overflow-auto max-h-40">
+          <div><span class="text-blue-400">taskId:</span> {{ message.taskId || 'null' }}</div>
+          <div><span class="text-blue-400">webUrl:</span> {{ message.webUrl || 'null' }}</div>
+          <div><span class="text-blue-400">status:</span> {{ message.status || 'null' }}</div>
+          <div><span class="text-blue-400">sent:</span> {{ message.sent }}</div>
+          <div><span class="text-blue-400">error:</span> {{ message.error || false }}</div>
+          <div><span class="text-blue-400">timestamp:</span> {{ message.timestamp }}</div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { marked } from 'marked'
 import { 
   ClipboardIcon, 
@@ -166,6 +179,9 @@ const props = defineProps({
 
 const emit = defineEmits(['copy'])
 
+// Enable debug info in development mode
+const showDebugInfo = ref(process.env.NODE_ENV === 'development' || window.location.hostname === 'localhost')
+
 // Configure marked for better code highlighting
 marked.setOptions({
   highlight: function(code, lang) {
@@ -180,7 +196,7 @@ const renderMarkdown = (content) => {
   
   try {
     // Check if content is an error message and handle it specially
-    if (content.startsWith('Error:')) {
+    if (typeof content === 'string' && content.startsWith('Error:')) {
       // For error messages, we'll still render them as markdown but with special styling
       const sanitizedContent = content
         .replace(/</g, '&lt;')
@@ -189,8 +205,11 @@ const renderMarkdown = (content) => {
       return `<div class="error-message">${marked(sanitizedContent)}</div>`
     }
     
+    // Ensure content is a string
+    const stringContent = typeof content === 'string' ? content : String(content)
+    
     // Sanitize content to prevent XSS
-    const sanitizedContent = content
+    const sanitizedContent = stringContent
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
     
@@ -198,18 +217,26 @@ const renderMarkdown = (content) => {
     return marked(sanitizedContent)
   } catch (error) {
     console.error('Error rendering markdown:', error)
-    return content || ''
+    // Return a fallback message if rendering fails
+    return `<div class="error-message">Error rendering content: ${error.message}</div>`
   }
 }
 
 const formatTime = (timestamp) => {
-  return new Date(timestamp).toLocaleTimeString([], { 
-    hour: '2-digit', 
-    minute: '2-digit' 
-  })
+  try {
+    return new Date(timestamp).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    })
+  } catch (error) {
+    console.error('Error formatting time:', error)
+    return 'Invalid time'
+  }
 }
 
 const getStatusText = (status) => {
+  if (!status) return 'Unknown'
+  
   switch (status) {
     case 'pending':
       return 'Queued'
@@ -266,6 +293,48 @@ const copyMessage = async () => {
 /* Add styles for error messages */
 :deep(.error-message) {
   @apply text-gray-100;
+}
+
+/* Add styles for status badges */
+.status-badge {
+  @apply inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full;
+}
+
+.status-badge.pending, .status-badge.queued {
+  @apply bg-gray-700 text-gray-300;
+}
+
+.status-badge.running, .status-badge.active, .status-badge.initiated {
+  @apply bg-blue-900/50 text-blue-300;
+}
+
+.status-badge.completed {
+  @apply bg-green-900/50 text-green-300;
+}
+
+.status-badge.failed, .status-badge.error, .status-badge.timeout {
+  @apply bg-red-900/50 text-red-300;
+}
+
+/* Pulse animation for active status */
+.pulse-dot {
+  @apply w-2 h-2 rounded-full mr-1;
+}
+
+.pulse-dot.running, .pulse-dot.active, .pulse-dot.initiated {
+  @apply bg-blue-400 animate-pulse;
+}
+
+.pulse-dot.pending, .pulse-dot.queued {
+  @apply bg-gray-400;
+}
+
+.pulse-dot.completed {
+  @apply bg-green-400;
+}
+
+.pulse-dot.failed, .pulse-dot.error, .pulse-dot.timeout {
+  @apply bg-red-400;
 }
 </style>
 

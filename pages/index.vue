@@ -235,6 +235,85 @@ const testConnection = async () => {
   }
 }
 
+// Function to handle reconnection for EventSource
+const createEventSourceWithReconnect = (url: string, headers: Record<string, string>, maxRetries = 3) => {
+  let retryCount = 0
+  let eventSource: EventSource | null = null
+  let isClosedIntentionally = false
+  
+  const connect = () => {
+    // Don't reconnect if closed intentionally
+    if (isClosedIntentionally) {
+      console.log('EventSource was closed intentionally, not reconnecting')
+      return
+    }
+    
+    // Close existing connection if any
+    if (eventSource) {
+      eventSource.close()
+    }
+    
+    try {
+      // Create URL with headers as query parameters for EventSource
+      const urlWithHeaders = new URL(url)
+      Object.entries(headers).forEach(([key, value]) => {
+        if (value) urlWithHeaders.searchParams.append(key, value)
+      })
+      
+      console.log(`Connecting to EventSource (attempt ${retryCount + 1}/${maxRetries}): ${urlWithHeaders.toString()}`)
+      eventSource = new EventSource(urlWithHeaders.toString())
+      
+      // Handle reconnection
+      eventSource.onerror = (error) => {
+        console.error(`EventSource error (attempt ${retryCount + 1}/${maxRetries}):`, error)
+        
+        if (isClosedIntentionally) {
+          console.log('EventSource was closed intentionally, not reconnecting after error')
+          return
+        }
+        
+        if (retryCount < maxRetries - 1) {
+          retryCount++
+          const delay = Math.pow(2, retryCount) * 1000
+          console.log(`Reconnecting in ${delay}ms...`)
+          setTimeout(connect, delay)
+        } else {
+          console.error(`Failed to connect after ${maxRetries} attempts`)
+          // Let the caller handle the final failure
+          if (eventSource && eventSource.onerror) {
+            eventSource.onerror(new Event('error'))
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error creating EventSource:', error)
+      
+      // Try to reconnect if not at max retries
+      if (retryCount < maxRetries - 1) {
+        retryCount++
+        const delay = Math.pow(2, retryCount) * 1000
+        console.log(`Error creating EventSource, reconnecting in ${delay}ms...`)
+        setTimeout(connect, delay)
+      }
+    }
+  }
+  
+  // Initial connection
+  connect()
+  
+  return {
+    getEventSource: () => eventSource,
+    close: () => {
+      isClosedIntentionally = true
+      if (eventSource) {
+        console.log('Closing EventSource intentionally')
+        eventSource.close()
+        eventSource = null
+      }
+    }
+  }
+}
+
 // Methods
 const scrollToBottom = () => {
   if (messagesContainer.value) {
@@ -287,19 +366,25 @@ const toggleSettings = () => {
 
 // Helper function to handle error responses
 const handleErrorResponse = (aiMessage: Message, errorMessage: string) => {
+  console.log('Handling error response:', errorMessage)
+  
   // If the error is about org_id_to_use, provide a helpful response
-  if (errorMessage.includes('org_id_to_use is not defined')) {
-    aiMessage.content = `Hello! I'm Codegen, an AI assistant that can help you with software development tasks. How can I assist you today?
+  if (typeof errorMessage === 'string' && errorMessage.includes('org_id_to_use is not defined')) {
+    console.log('Detected org_id_to_use error, showing setup instructions')
+    
+    aiMessage.content = `## Welcome to Codegen!
 
-I can help with:
-- Exploring and understanding codebases
-- Creating or modifying code
-- Reviewing pull requests
-- Researching technical topics
-- Creating GitHub issues or Linear tickets
-- Answering questions about code
+To get started, you need to set up your Codegen credentials:
 
-Let me know what you'd like to work on!`
+1. Click the ⚙️ (Settings) icon in the top right corner
+2. Enter your Codegen API token and Organization ID
+3. Click Save
+
+If you don't have these credentials yet, you can:
+- Sign up at [codegen.com](https://codegen.com)
+- Or use this UI in demo mode to see how it works
+
+Need help? Visit [docs.codegen.com](https://docs.codegen.com) for more information.`
   } else {
     // For other errors, show a generic helpful message
     aiMessage.content = `I'm having trouble processing your request right now. Here are some things I can help you with:
@@ -331,6 +416,80 @@ Please try again or let me know how I can assist you.`
   }
 }
 
+// Add a retry mechanism for failed requests
+const retryRequest = async (url: string, options: RequestInit, maxRetries = 3): Promise<Response> => {
+  let lastError: Error | null = null
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt + 1}/${maxRetries} for ${url}`)
+      
+      // Add timeout to fetch requests
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+      
+      const fetchOptions = {
+        ...options,
+        signal: controller.signal
+      }
+      
+      try {
+        const response = await fetch(url, fetchOptions)
+        clearTimeout(timeoutId)
+        
+        // Log response status
+        console.log(`Response status: ${response.status} ${response.statusText}`)
+        
+        // For non-ok responses, log more details
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type')
+          if (contentType && contentType.includes('application/json')) {
+            try {
+              // Clone the response to avoid consuming it
+              const clonedResponse = response.clone()
+              const errorData = await clonedResponse.json()
+              console.error('Error response data:', errorData)
+            } catch (e) {
+              console.error('Failed to parse error response as JSON')
+            }
+          } else {
+            try {
+              // Clone the response to avoid consuming it
+              const clonedResponse = response.clone()
+              const errorText = await clonedResponse.text()
+              console.error('Error response text:', errorText)
+            } catch (e) {
+              console.error('Failed to get error response text')
+            }
+          }
+        }
+        
+        return response
+      } catch (fetchError) {
+        clearTimeout(timeoutId)
+        throw fetchError
+      }
+    } catch (error) {
+      console.error(`Attempt ${attempt + 1}/${maxRetries} failed:`, error)
+      lastError = error instanceof Error ? error : new Error(String(error))
+      
+      // Check if this was an abort error (timeout)
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        console.warn(`Request timed out after 30 seconds`)
+      }
+      
+      // Wait before retrying (exponential backoff)
+      if (attempt < maxRetries - 1) {
+        const delay = Math.pow(2, attempt) * 1000
+        console.log(`Retrying in ${delay}ms...`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
+  }
+  
+  throw lastError || new Error(`Failed after ${maxRetries} attempts`)
+}
+
 const sendMessage = async () => {
   if (!newMessage.value.trim() || !currentThread.value) return
 
@@ -342,6 +501,17 @@ const sendMessage = async () => {
     sent: true,
     timestamp: Date.now()
   }
+  
+  // Validate user message
+  if (!validateMessage(userMessage)) {
+    console.error('Invalid user message, fixing...')
+    userMessage.id = Date.now()
+    userMessage.role = 'user'
+    userMessage.content = newMessage.value.trim() || 'Empty message'
+    userMessage.sent = true
+    userMessage.timestamp = Date.now()
+  }
+  
   currentThread.value.messages.push(userMessage)
   currentThread.value.lastActivity = new Date()
 
@@ -361,6 +531,20 @@ const sendMessage = async () => {
     taskId: null,
     webUrl: null
   }
+  
+  // Validate AI message
+  if (!validateMessage(aiMessage)) {
+    console.error('Invalid AI message, fixing...')
+    aiMessage.id = Date.now() + 1
+    aiMessage.role = 'assistant'
+    aiMessage.content = ''
+    aiMessage.sent = false
+    aiMessage.timestamp = Date.now() + 1
+    aiMessage.steps = [
+      { id: 1, title: 'Starting Task', description: 'Initializing Codegen agent...', status: 'active' }
+    ]
+  }
+  
   currentThread.value.messages.push(aiMessage)
   saveToLocalStorage()
   scrollToBottom()
@@ -374,7 +558,7 @@ const sendMessage = async () => {
     const base_url = settings.value.apiBaseUrl
 
     // Initial request to start the task
-    const response = await fetch(`${BACKEND_URL}/api/v1/run-task`, {
+    const response = await retryRequest(`${BACKEND_URL}/api/v1/run-task`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -434,7 +618,8 @@ const sendMessage = async () => {
       }
       
       try {
-        const statusResponse = await fetch(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
+        console.log(`Polling for task status: ${data.task_id}`)
+        const statusResponse = await retryRequest(`${BACKEND_URL}/api/v1/task/${data.task_id}/status`, {
           headers: {
             'X-Organization-ID': org_id_to_use,
             'X-Token': token_to_use,
@@ -443,10 +628,30 @@ const sendMessage = async () => {
         })
         
         if (statusResponse.ok) {
-          const statusData = await statusResponse.json()
-          console.log('Poll status:', statusData)
+          let statusData: any
+          try {
+            statusData = await statusResponse.json()
+            console.log('Poll status:', statusData)
+          } catch (parseError) {
+            console.error('Error parsing status response:', parseError)
+            return
+          }
+          
+          // Validate status data
+          if (!statusData || typeof statusData !== 'object') {
+            console.error('Invalid status data, not an object:', statusData)
+            return
+          }
           
           if (statusData.status === 'completed' && !aiMessage.sent) {
+            console.log('Poll detected completion:', statusData)
+            
+            // Ensure result is a string
+            if (statusData.result !== undefined && statusData.result !== null && typeof statusData.result !== 'string') {
+              console.warn('Status result is not a string, converting:', statusData.result)
+              statusData.result = String(statusData.result || '')
+            }
+            
             aiMessage.content = statusData.result || 'Task completed successfully.'
             aiMessage.sent = true
             aiMessage.taskId = statusData.task_id
@@ -490,170 +695,157 @@ const sendMessage = async () => {
     }
 
     // Connect to SSE stream for updates
-    const eventSource = new EventSource(`${BACKEND_URL}/api/v1/task/${data.task_id}/stream`)
+    const eventSourceManager = createEventSourceWithReconnect(
+      `${BACKEND_URL}/api/v1/task/${data.task_id}/stream`, 
+      {
+        'X-Organization-ID': org_id_to_use,
+        'X-Token': token_to_use,
+        'X-Base-URL': base_url || ''
+      }
+    )
     
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error)
-      // Don't close immediately, let it retry
-    }
+    const eventSource = eventSourceManager.getEventSource()
     
-    eventSource.onmessage = (event) => {
-      try {
-        if (event.data === '[DONE]') {
-          console.log('Stream completed')
-          clearTimeout(timeoutId)
-          clearInterval(pollInterval)
-          eventSource.close()
-          activeTasks.value = Math.max(0, activeTasks.value - 1)
-          return
-        }
+    if (eventSource) {
+      eventSource.onmessage = (event) => {
+        try {
+          console.log('Raw event data received:', event.data)
+          
+          if (event.data === '[DONE]') {
+            console.log('Stream completed')
+            clearTimeout(timeoutId)
+            clearInterval(pollInterval)
+            eventSourceManager.close()
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
+            return
+          }
 
-        const parsed = JSON.parse(event.data)
-        console.log('Stream update:', parsed)
+          let parsed: any
+          try {
+            parsed = JSON.parse(event.data)
+            console.log('Stream update:', parsed)
+          } catch (parseError) {
+            console.error('Error parsing event data:', parseError, 'Raw data:', event.data)
+            return
+          }
 
-        // Update step information based on current_step or status
-        if (aiMessage.steps) {
-          if (parsed.current_step) {
-            // Check if this step already exists
-            const stepExists = aiMessage.steps.some(step => 
-              step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
-              step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
-            )
-            
-            if (!stepExists) {
-              // Mark previous steps as completed
-              aiMessage.steps.forEach(step => {
-                if (step.status === 'active') {
-                  step.status = 'completed'
-                }
-              })
-              
-              // Add new step
-              aiMessage.steps.push({
-                id: aiMessage.steps.length + 1,
-                title: parsed.current_step,
-                description: `Processing: ${parsed.current_step}`,
-                status: 'active'
-              })
-              
-              console.log('Added new step:', parsed.current_step)
-            } else {
-              // Update existing step description
-              const existingStep = aiMessage.steps.find(step => 
+          // Validate parsed data
+          if (!parsed || typeof parsed !== 'object') {
+            console.error('Invalid parsed data, not an object:', parsed)
+            return
+          }
+
+          // Update step information based on current_step or status
+          if (aiMessage.steps) {
+            if (parsed.current_step) {
+              // Check if this step already exists
+              const stepExists = aiMessage.steps.some(step => 
                 step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
                 step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
               )
-              if (existingStep && existingStep.status !== 'completed') {
-                existingStep.status = 'active'
-                existingStep.description = `Processing: ${parsed.current_step}`
+              
+              if (!stepExists) {
+                // Mark previous steps as completed
+                aiMessage.steps.forEach(step => {
+                  if (step.status === 'active') {
+                    step.status = 'completed'
+                  }
+                })
+                
+                // Add new step
+                aiMessage.steps.push({
+                  id: aiMessage.steps.length + 1,
+                  title: parsed.current_step,
+                  description: `Processing: ${parsed.current_step}`,
+                  status: 'active'
+                })
+                
+                console.log('Added new step:', parsed.current_step)
+              } else {
+                // Update existing step description
+                const existingStep = aiMessage.steps.find(step => 
+                  step.title.toLowerCase().includes(parsed.current_step.toLowerCase()) ||
+                  step.description.toLowerCase().includes(parsed.current_step.toLowerCase())
+                )
+                if (existingStep && existingStep.status !== 'completed') {
+                  existingStep.status = 'active'
+                  existingStep.description = `Processing: ${parsed.current_step}`
+                }
               }
-            }
-          } else if (parsed.status && ['running', 'in_progress', 'active', 'processing'].includes(parsed.status)) {
-            // Update description of active step with status
-            const activeStep = aiMessage.steps.find(step => step.status === 'active')
-            if (activeStep) {
-              activeStep.description = `Status: ${parsed.status}`
-            } else {
-              // No active step, mark first pending as active
-              const pendingStep = aiMessage.steps.find(step => step.status === 'pending')
-              if (pendingStep) {
-                pendingStep.status = 'active'
-                pendingStep.description = `Status: ${parsed.status}`
+            } else if (parsed.status && ['running', 'in_progress', 'active', 'processing'].includes(parsed.status)) {
+              // Update description of active step with status
+              const activeStep = aiMessage.steps.find(step => step.status === 'active')
+              if (activeStep) {
+                activeStep.description = `Status: ${parsed.status}`
+              } else {
+                // No active step, mark first pending as active
+                const pendingStep = aiMessage.steps.find(step => step.status === 'pending')
+                if (pendingStep) {
+                  pendingStep.status = 'active'
+                  pendingStep.description = `Status: ${parsed.status}`
+                }
               }
             }
           }
-        }
 
-        // Update task ID and web URL
-        if (parsed.task_id && !aiMessage.taskId) {
-          aiMessage.taskId = parsed.task_id
-        }
-        if (parsed.web_url) {
-          aiMessage.webUrl = parsed.web_url
-        }
-
-        // Handle completion
-        if (parsed.status === 'completed') {
-          console.log('Task completion detected:', parsed)
-          
-          // Ensure we have actual response text
-          let finalResponse = parsed.result || 'Task completed successfully.'
-          
-          // If the result looks like a generic message, try to get more details
-          if (finalResponse === 'Task completed successfully.' && parsed.web_url) {
-            finalResponse = `Task completed successfully. View full details at: ${parsed.web_url}`
+          // Update task ID and web URL
+          if (parsed.task_id && !aiMessage.taskId) {
+            aiMessage.taskId = parsed.task_id
           }
-          
-          console.log('Setting final response:', finalResponse)
-          aiMessage.content = finalResponse
-          aiMessage.sent = true
-          
-          // Mark all steps as completed and add final step
-          if (aiMessage.steps) {
-            aiMessage.steps.forEach(step => step.status = 'completed')
+          if (parsed.web_url) {
+            aiMessage.webUrl = parsed.web_url
+          }
+
+          // Handle completion
+          if (parsed.status === 'completed') {
+            console.log('Task completion detected:', parsed)
             
-            // Add completion step if not already present
-            const hasCompletionStep = aiMessage.steps.some(step => 
-              step.title.toLowerCase().includes('completed') || 
-              step.title.toLowerCase().includes('finished')
-            )
+            // Ensure we have actual response text
+            let finalResponse = parsed.result || 'Task completed successfully.'
             
-            if (!hasCompletionStep) {
-              aiMessage.steps.push({
-                id: aiMessage.steps.length + 1,
-                title: 'Task Completed',
-                description: 'Response generated successfully',
-                status: 'completed'
-              })
+            // If the result looks like a generic message, try to get more details
+            if (finalResponse === 'Task completed successfully.' && parsed.web_url) {
+              finalResponse = `Task completed successfully. View full details at: ${parsed.web_url}`
             }
-          }
-          
-          currentThread.value!.lastActivity = new Date()
-          saveToLocalStorage()
-          
-          console.log('Task completed with response:', finalResponse)
-        }
-        // Handle errors
-        else if (parsed.status === 'failed' || parsed.status === 'error') {
-          aiMessage.content = parsed.error || 'Task failed'
-          aiMessage.sent = true
-          aiMessage.error = true
-          // Mark remaining steps as failed
-          if (aiMessage.steps) {
-            aiMessage.steps.forEach(step => {
-              if (step.status === 'pending' || step.status === 'active') {
-                step.status = 'failed'
+            
+            console.log('Setting final response:', finalResponse)
+            aiMessage.content = finalResponse
+            aiMessage.sent = true
+            
+            // Mark all steps as completed and add final step
+            if (aiMessage.steps) {
+              aiMessage.steps.forEach(step => step.status = 'completed')
+              
+              // Add completion step if not already present
+              const hasCompletionStep = aiMessage.steps.some(step => 
+                step.title.toLowerCase().includes('completed') || 
+                step.title.toLowerCase().includes('finished')
+              )
+              
+              if (!hasCompletionStep) {
+                aiMessage.steps.push({
+                  id: aiMessage.steps.length + 1,
+                  title: 'Task Completed',
+                  description: 'Response generated successfully',
+                  status: 'completed'
+                })
               }
-            })
+            }
+            
+            currentThread.value!.lastActivity = new Date()
+            saveToLocalStorage()
+            
+            console.log('Task completed with response:', finalResponse)
+            
+            // Close the event source after completion
+            eventSourceManager.close()
+            clearTimeout(timeoutId)
+            clearInterval(pollInterval)
+            activeTasks.value = Math.max(0, activeTasks.value - 1)
           }
-          currentThread.value!.lastActivity = new Date()
-          saveToLocalStorage()
-        }
-
-        scrollToBottom()
-      } catch (e) {
-        console.error('Error processing stream message:', e)
-      }
-    }
-
-    // Handle SSE errors
-    eventSource.onerror = (error) => {
-      console.error('EventSource error:', error)
-      
-      // Don't immediately close - let the browser try to reconnect
-      setTimeout(() => {
-        // If after 10 seconds we still haven't received a completion, 
-        // then consider it a failure and clean up
-        if (!aiMessage.sent) {
-          console.error('SSE connection failed to recover')
-          eventSource.close()
-          clearTimeout(timeoutId)
-          clearInterval(pollInterval)
-          activeTasks.value = Math.max(0, activeTasks.value - 1)
-          
-          // Only update message if it hasn't been completed
-          if (!aiMessage.sent) {
-            aiMessage.content = 'Error: Failed to get response from agent. Please try again.'
+          // Handle errors
+          else if (parsed.status === 'failed' || parsed.status === 'error') {
+            aiMessage.content = parsed.error || 'Task failed'
             aiMessage.sent = true
             aiMessage.error = true
             // Mark remaining steps as failed
@@ -666,10 +858,13 @@ const sendMessage = async () => {
             }
             currentThread.value!.lastActivity = new Date()
             saveToLocalStorage()
-            scrollToBottom()
           }
+
+          scrollToBottom()
+        } catch (e) {
+          console.error('Error processing stream message:', e)
         }
-      }, 10000) // Wait 10 seconds before giving up on reconnection
+      }
     }
 
   } catch (error) {
@@ -688,6 +883,76 @@ const sendMessage = async () => {
     saveToLocalStorage()
     scrollToBottom()
   }
+}
+
+// Helper function to validate message structure
+const validateMessage = (message: Message): boolean => {
+  if (!message) {
+    console.error('Message is null or undefined')
+    return false
+  }
+  
+  // Check required fields
+  if (typeof message.id !== 'number') {
+    console.error('Message has invalid id:', message.id)
+    return false
+  }
+  
+  if (message.role !== 'user' && message.role !== 'assistant') {
+    console.error('Message has invalid role:', message.role)
+    return false
+  }
+  
+  if (typeof message.timestamp !== 'number') {
+    console.error('Message has invalid timestamp:', message.timestamp)
+    return false
+  }
+  
+  // Validate content (can be empty but should be a string if present)
+  if (message.content !== undefined && message.content !== null && typeof message.content !== 'string') {
+    console.warn('Message has non-string content, converting to string:', message.content)
+    message.content = String(message.content)
+  }
+  
+  // Validate steps if present
+  if (message.steps) {
+    if (!Array.isArray(message.steps)) {
+      console.error('Message steps is not an array:', message.steps)
+      message.steps = []
+    } else {
+      // Validate each step
+      message.steps = message.steps.filter(step => {
+        if (!step || typeof step !== 'object') {
+          console.error('Invalid step object:', step)
+          return false
+        }
+        
+        if (typeof step.id !== 'number') {
+          console.error('Step has invalid id:', step.id)
+          return false
+        }
+        
+        if (typeof step.title !== 'string') {
+          console.error('Step has invalid title:', step.title)
+          step.title = String(step.title || 'Unknown step')
+        }
+        
+        if (typeof step.description !== 'string') {
+          console.error('Step has invalid description:', step.description)
+          step.description = String(step.description || '')
+        }
+        
+        if (!['pending', 'active', 'completed', 'failed'].includes(step.status)) {
+          console.error('Step has invalid status:', step.status)
+          step.status = 'pending'
+        }
+        
+        return true
+      })
+    }
+  }
+  
+  return true
 }
 
 // Watch for thread changes to scroll to bottom
