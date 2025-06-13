@@ -79,7 +79,7 @@ def get_codegen_config() -> CodegenConfig:
     return CodegenConfig(
         org_id=org_id,
         token=token,
-        base_url=os.getenv("CODEGEN_BASE_URL", "https://codegen-sh-rest-api.modal.run")
+        base_url=os.getenv("CODEGEN_BASE_URL")  # Don't use default base_url, let SDK use its default
     )
 
 def get_server_config() -> ServerConfig:
@@ -160,7 +160,7 @@ class AgentClient:
                     task.refresh()
                     status = task.status.lower() if task.status else "unknown"
                     
-                    if status == "completed":
+                    if status in ["completed", "complete"]:
                         return {
                             "status": "completed",
                             "result": getattr(task, 'result', None),
@@ -625,16 +625,44 @@ async def stream_task_events(
                         current_status = task.status.lower() if task.status else "unknown"
                         logger.info(f"Task {task_id} status: {current_status}")
                         
-                        # Extract step information
+                        # Extract step information from multiple sources
                         current_step = None
                         try:
-                            # Try to get step information from task.result or task.summary
+                            # Method 1: Try to get step from result
                             if hasattr(task, 'result') and isinstance(task.result, dict):
-                                current_step = task.result.get('current_step')
-                            elif hasattr(task, 'summary') and isinstance(task.summary, dict):
-                                current_step = task.summary.get('current_step')
+                                current_step = task.result.get('current_step') or task.result.get('step') or task.result.get('action')
+                            
+                            # Method 2: Try to get step from summary
+                            if not current_step and hasattr(task, 'summary') and isinstance(task.summary, dict):
+                                current_step = task.summary.get('current_step') or task.summary.get('step') or task.summary.get('action')
+                            
+                            # Method 3: Try to get step from status or other attributes
+                            if not current_step:
+                                for attr_name in ['current_action', 'current_step', 'step', 'action', 'phase']:
+                                    if hasattr(task, attr_name):
+                                        attr_value = getattr(task, attr_name)
+                                        if attr_value and isinstance(attr_value, str):
+                                            current_step = attr_value
+                                            break
+                            
+                            # Method 4: Infer step from status
+                            if not current_step and current_status:
+                                status_to_step = {
+                                    'pending': 'Task queued',
+                                    'running': 'Processing request',
+                                    'in_progress': 'Executing task',
+                                    'active': 'Agent working',
+                                    'processing': 'Analyzing input',
+                                    'executing': 'Running commands',
+                                    'finalizing': 'Completing task'
+                                }
+                                current_step = status_to_step.get(current_status, f"Status: {current_status}")
+                                
                         except Exception as e:
                             logger.warning(f"Could not extract step info: {e}")
+                            # Fallback step based on status
+                            if current_status in ['running', 'in_progress', 'active']:
+                                current_step = f"Processing ({current_status})"
                         
                         # Prepare update data
                         update_data = {
@@ -653,15 +681,64 @@ async def stream_task_events(
                             logger.info(f"Task {task_id} step: {current_step}")
                         
                         # Check if task is complete
-                        if current_status == "completed":
-                            result = (
-                                getattr(task, 'result', None) or
-                                getattr(task, 'summary', None) or
-                                getattr(task, 'output', None) or
-                                (f"Task completed successfully. View details at: {task.web_url}" if hasattr(task, 'web_url') else None) or
-                                "Task completed successfully."
-                            )
-                            logger.info(f"Task {task_id} completed with result")
+                        if current_status in ["completed", "complete"]:
+                            # Try multiple ways to get the result
+                            result = None
+                            
+                            # Method 1: Try to get result directly
+                            if hasattr(task, 'result') and task.result:
+                                if isinstance(task.result, dict):
+                                    result = task.result.get('content') or task.result.get('response') or str(task.result)
+                                else:
+                                    result = str(task.result)
+                            
+                            # Method 2: Try to get summary
+                            if not result and hasattr(task, 'summary') and task.summary:
+                                if isinstance(task.summary, dict):
+                                    result = task.summary.get('content') or task.summary.get('response') or str(task.summary)
+                                else:
+                                    result = str(task.summary)
+                            
+                            # Method 3: Try to get output
+                            if not result and hasattr(task, 'output') and task.output:
+                                result = str(task.output)
+                            
+                            # Method 4: Try to get response from messages
+                            if not result and hasattr(task, 'messages') and task.messages:
+                                try:
+                                    # Get the last assistant message
+                                    for msg in reversed(task.messages):
+                                        if hasattr(msg, 'role') and msg.role == 'assistant' and hasattr(msg, 'content'):
+                                            result = msg.content
+                                            break
+                                except Exception as e:
+                                    logger.warning(f"Could not extract from messages: {e}")
+                            
+                            # Method 5: Try to get any text content from task attributes
+                            if not result:
+                                for attr_name in ['content', 'response', 'text', 'answer']:
+                                    if hasattr(task, attr_name):
+                                        attr_value = getattr(task, attr_name)
+                                        if attr_value and isinstance(attr_value, str) and len(attr_value.strip()) > 0:
+                                            result = attr_value
+                                            break
+                            
+                            # Fallback with web URL
+                            if not result:
+                                if hasattr(task, 'web_url') and task.web_url:
+                                    result = f"Task completed successfully. View full details at: {task.web_url}"
+                                else:
+                                    result = "Task completed successfully."
+                            
+                            logger.info(f"Task {task_id} completed with result: {result[:200]}...")
+                            
+                            # Debug: Log all task attributes for debugging
+                            debug_attrs = {}
+                            for attr in ['result', 'summary', 'output', 'content', 'response', 'messages']:
+                                if hasattr(task, attr):
+                                    attr_val = getattr(task, attr)
+                                    debug_attrs[attr] = str(attr_val)[:100] if attr_val else None
+                            logger.debug(f"Task {task_id} attributes: {debug_attrs}")
                             
                             # Send completion event
                             yield f"data: {json.dumps({
