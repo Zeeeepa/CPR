@@ -239,37 +239,61 @@ const testConnection = async () => {
 const createEventSourceWithReconnect = (url: string, headers: Record<string, string>, maxRetries = 3) => {
   let retryCount = 0
   let eventSource: EventSource | null = null
+  let isClosedIntentionally = false
   
   const connect = () => {
+    // Don't reconnect if closed intentionally
+    if (isClosedIntentionally) {
+      console.log('EventSource was closed intentionally, not reconnecting')
+      return
+    }
+    
     // Close existing connection if any
     if (eventSource) {
       eventSource.close()
     }
     
-    // Create URL with headers as query parameters for EventSource
-    const urlWithHeaders = new URL(url)
-    Object.entries(headers).forEach(([key, value]) => {
-      if (value) urlWithHeaders.searchParams.append(key, value)
-    })
-    
-    console.log(`Connecting to EventSource (attempt ${retryCount + 1}/${maxRetries}): ${urlWithHeaders.toString()}`)
-    eventSource = new EventSource(urlWithHeaders.toString())
-    
-    // Handle reconnection
-    eventSource.onerror = (error) => {
-      console.error(`EventSource error (attempt ${retryCount + 1}/${maxRetries}):`, error)
+    try {
+      // Create URL with headers as query parameters for EventSource
+      const urlWithHeaders = new URL(url)
+      Object.entries(headers).forEach(([key, value]) => {
+        if (value) urlWithHeaders.searchParams.append(key, value)
+      })
       
+      console.log(`Connecting to EventSource (attempt ${retryCount + 1}/${maxRetries}): ${urlWithHeaders.toString()}`)
+      eventSource = new EventSource(urlWithHeaders.toString())
+      
+      // Handle reconnection
+      eventSource.onerror = (error) => {
+        console.error(`EventSource error (attempt ${retryCount + 1}/${maxRetries}):`, error)
+        
+        if (isClosedIntentionally) {
+          console.log('EventSource was closed intentionally, not reconnecting after error')
+          return
+        }
+        
+        if (retryCount < maxRetries - 1) {
+          retryCount++
+          const delay = Math.pow(2, retryCount) * 1000
+          console.log(`Reconnecting in ${delay}ms...`)
+          setTimeout(connect, delay)
+        } else {
+          console.error(`Failed to connect after ${maxRetries} attempts`)
+          // Let the caller handle the final failure
+          if (eventSource && eventSource.onerror) {
+            eventSource.onerror(new Event('error'))
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error creating EventSource:', error)
+      
+      // Try to reconnect if not at max retries
       if (retryCount < maxRetries - 1) {
         retryCount++
         const delay = Math.pow(2, retryCount) * 1000
-        console.log(`Reconnecting in ${delay}ms...`)
+        console.log(`Error creating EventSource, reconnecting in ${delay}ms...`)
         setTimeout(connect, delay)
-      } else {
-        console.error(`Failed to connect after ${maxRetries} attempts`)
-        // Let the caller handle the final failure
-        if (eventSource && eventSource.onerror) {
-          eventSource.onerror(new Event('error'))
-        }
       }
     }
   }
@@ -280,7 +304,9 @@ const createEventSourceWithReconnect = (url: string, headers: Record<string, str
   return {
     getEventSource: () => eventSource,
     close: () => {
+      isClosedIntentionally = true
       if (eventSource) {
+        console.log('Closing EventSource intentionally')
         eventSource.close()
         eventSource = null
       }
@@ -340,19 +366,25 @@ const toggleSettings = () => {
 
 // Helper function to handle error responses
 const handleErrorResponse = (aiMessage: Message, errorMessage: string) => {
+  console.log('Handling error response:', errorMessage)
+  
   // If the error is about org_id_to_use, provide a helpful response
-  if (errorMessage.includes('org_id_to_use is not defined')) {
-    aiMessage.content = `Hello! I'm Codegen, an AI assistant that can help you with software development tasks. How can I assist you today?
+  if (typeof errorMessage === 'string' && errorMessage.includes('org_id_to_use is not defined')) {
+    console.log('Detected org_id_to_use error, showing setup instructions')
+    
+    aiMessage.content = `## Welcome to Codegen!
 
-I can help with:
-- Exploring and understanding codebases
-- Creating or modifying code
-- Reviewing pull requests
-- Researching technical topics
-- Creating GitHub issues or Linear tickets
-- Answering questions about code
+To get started, you need to set up your Codegen credentials:
 
-Let me know what you'd like to work on!`
+1. Click the ⚙️ (Settings) icon in the top right corner
+2. Enter your Codegen API token and Organization ID
+3. Click Save
+
+If you don't have these credentials yet, you can:
+- Sign up at [codegen.com](https://codegen.com)
+- Or use this UI in demo mode to see how it works
+
+Need help? Visit [docs.codegen.com](https://docs.codegen.com) for more information.`
   } else {
     // For other errors, show a generic helpful message
     aiMessage.content = `I'm having trouble processing your request right now. Here are some things I can help you with:
@@ -391,11 +423,60 @@ const retryRequest = async (url: string, options: RequestInit, maxRetries = 3): 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       console.log(`Attempt ${attempt + 1}/${maxRetries} for ${url}`)
-      const response = await fetch(url, options)
-      return response
+      
+      // Add timeout to fetch requests
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+      
+      const fetchOptions = {
+        ...options,
+        signal: controller.signal
+      }
+      
+      try {
+        const response = await fetch(url, fetchOptions)
+        clearTimeout(timeoutId)
+        
+        // Log response status
+        console.log(`Response status: ${response.status} ${response.statusText}`)
+        
+        // For non-ok responses, log more details
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type')
+          if (contentType && contentType.includes('application/json')) {
+            try {
+              // Clone the response to avoid consuming it
+              const clonedResponse = response.clone()
+              const errorData = await clonedResponse.json()
+              console.error('Error response data:', errorData)
+            } catch (e) {
+              console.error('Failed to parse error response as JSON')
+            }
+          } else {
+            try {
+              // Clone the response to avoid consuming it
+              const clonedResponse = response.clone()
+              const errorText = await clonedResponse.text()
+              console.error('Error response text:', errorText)
+            } catch (e) {
+              console.error('Failed to get error response text')
+            }
+          }
+        }
+        
+        return response
+      } catch (fetchError) {
+        clearTimeout(timeoutId)
+        throw fetchError
+      }
     } catch (error) {
       console.error(`Attempt ${attempt + 1}/${maxRetries} failed:`, error)
       lastError = error instanceof Error ? error : new Error(String(error))
+      
+      // Check if this was an abort error (timeout)
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        console.warn(`Request timed out after 30 seconds`)
+      }
       
       // Wait before retrying (exponential backoff)
       if (attempt < maxRetries - 1) {
@@ -420,6 +501,17 @@ const sendMessage = async () => {
     sent: true,
     timestamp: Date.now()
   }
+  
+  // Validate user message
+  if (!validateMessage(userMessage)) {
+    console.error('Invalid user message, fixing...')
+    userMessage.id = Date.now()
+    userMessage.role = 'user'
+    userMessage.content = newMessage.value.trim() || 'Empty message'
+    userMessage.sent = true
+    userMessage.timestamp = Date.now()
+  }
+  
   currentThread.value.messages.push(userMessage)
   currentThread.value.lastActivity = new Date()
 
@@ -439,6 +531,20 @@ const sendMessage = async () => {
     taskId: null,
     webUrl: null
   }
+  
+  // Validate AI message
+  if (!validateMessage(aiMessage)) {
+    console.error('Invalid AI message, fixing...')
+    aiMessage.id = Date.now() + 1
+    aiMessage.role = 'assistant'
+    aiMessage.content = ''
+    aiMessage.sent = false
+    aiMessage.timestamp = Date.now() + 1
+    aiMessage.steps = [
+      { id: 1, title: 'Starting Task', description: 'Initializing Codegen agent...', status: 'active' }
+    ]
+  }
+  
   currentThread.value.messages.push(aiMessage)
   saveToLocalStorage()
   scrollToBottom()
@@ -522,11 +628,30 @@ const sendMessage = async () => {
         })
         
         if (statusResponse.ok) {
-          const statusData = await statusResponse.json()
-          console.log('Poll status:', statusData)
+          let statusData: any
+          try {
+            statusData = await statusResponse.json()
+            console.log('Poll status:', statusData)
+          } catch (parseError) {
+            console.error('Error parsing status response:', parseError)
+            return
+          }
+          
+          // Validate status data
+          if (!statusData || typeof statusData !== 'object') {
+            console.error('Invalid status data, not an object:', statusData)
+            return
+          }
           
           if (statusData.status === 'completed' && !aiMessage.sent) {
             console.log('Poll detected completion:', statusData)
+            
+            // Ensure result is a string
+            if (statusData.result !== undefined && statusData.result !== null && typeof statusData.result !== 'string') {
+              console.warn('Status result is not a string, converting:', statusData.result)
+              statusData.result = String(statusData.result || '')
+            }
+            
             aiMessage.content = statusData.result || 'Task completed successfully.'
             aiMessage.sent = true
             aiMessage.taskId = statusData.task_id
@@ -595,8 +720,20 @@ const sendMessage = async () => {
             return
           }
 
-          const parsed = JSON.parse(event.data)
-          console.log('Stream update:', parsed)
+          let parsed: any
+          try {
+            parsed = JSON.parse(event.data)
+            console.log('Stream update:', parsed)
+          } catch (parseError) {
+            console.error('Error parsing event data:', parseError, 'Raw data:', event.data)
+            return
+          }
+
+          // Validate parsed data
+          if (!parsed || typeof parsed !== 'object') {
+            console.error('Invalid parsed data, not an object:', parsed)
+            return
+          }
 
           // Update step information based on current_step or status
           if (aiMessage.steps) {
@@ -748,6 +885,76 @@ const sendMessage = async () => {
   }
 }
 
+// Helper function to validate message structure
+const validateMessage = (message: Message): boolean => {
+  if (!message) {
+    console.error('Message is null or undefined')
+    return false
+  }
+  
+  // Check required fields
+  if (typeof message.id !== 'number') {
+    console.error('Message has invalid id:', message.id)
+    return false
+  }
+  
+  if (message.role !== 'user' && message.role !== 'assistant') {
+    console.error('Message has invalid role:', message.role)
+    return false
+  }
+  
+  if (typeof message.timestamp !== 'number') {
+    console.error('Message has invalid timestamp:', message.timestamp)
+    return false
+  }
+  
+  // Validate content (can be empty but should be a string if present)
+  if (message.content !== undefined && message.content !== null && typeof message.content !== 'string') {
+    console.warn('Message has non-string content, converting to string:', message.content)
+    message.content = String(message.content)
+  }
+  
+  // Validate steps if present
+  if (message.steps) {
+    if (!Array.isArray(message.steps)) {
+      console.error('Message steps is not an array:', message.steps)
+      message.steps = []
+    } else {
+      // Validate each step
+      message.steps = message.steps.filter(step => {
+        if (!step || typeof step !== 'object') {
+          console.error('Invalid step object:', step)
+          return false
+        }
+        
+        if (typeof step.id !== 'number') {
+          console.error('Step has invalid id:', step.id)
+          return false
+        }
+        
+        if (typeof step.title !== 'string') {
+          console.error('Step has invalid title:', step.title)
+          step.title = String(step.title || 'Unknown step')
+        }
+        
+        if (typeof step.description !== 'string') {
+          console.error('Step has invalid description:', step.description)
+          step.description = String(step.description || '')
+        }
+        
+        if (!['pending', 'active', 'completed', 'failed'].includes(step.status)) {
+          console.error('Step has invalid status:', step.status)
+          step.status = 'pending'
+        }
+        
+        return true
+      })
+    }
+  }
+  
+  return true
+}
+
 // Watch for thread changes to scroll to bottom
 watch(currentThread, () => {
   nextTick(() => {
@@ -755,4 +962,3 @@ watch(currentThread, () => {
   })
 }, { deep: true })
 </script>
-
