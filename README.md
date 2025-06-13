@@ -49,12 +49,12 @@ A chat interface for interacting with Codegen AI agents.
 
 ## Running the Application
 
-### Using the Deployment Script
+### Using the Deployment Script (Recommended)
 
 The easiest way to run the application is using the deployment script:
 
 ```bash
-./deploy.sh
+./start_and_test.sh
 ```
 
 This will:
@@ -80,7 +80,7 @@ If you prefer to start the servers manually:
    ```
 
 3. Access the application at:
-   - Frontend: http://localhost:3002
+   - Frontend: http://localhost:3001
    - Backend API: http://localhost:8002
 
 ## Testing
@@ -88,7 +88,7 @@ If you prefer to start the servers manually:
 Run the validation script to verify that everything is working correctly:
 
 ```bash
-python validate_ui.py
+python test_ui_flow.py
 ```
 
 For testing the backend API directly:
@@ -113,6 +113,24 @@ To stop all running servers:
 - `POST /api/v1/test-connection`: Test connection to the Codegen API
 - `GET /api/v1/config`: Get current configuration
 - `GET /api/v1/tasks`: List all active tasks
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Connection Failed**: Check your CODEGEN_ORG_ID and CODEGEN_TOKEN environment variables
+2. **Port Conflicts**: Ensure ports 3001 and 8002 are available
+3. **Build Errors**: Run `npm install` to ensure all dependencies are installed
+4. **Backend Errors**: Check that Python dependencies are installed with `pip install -r backend/requirements.txt`
+
+### Debug Mode
+
+Start the backend with debug logging:
+
+```bash
+cd backend
+LOG_LEVEL=debug python api.py
+```
 
 ## License
 
