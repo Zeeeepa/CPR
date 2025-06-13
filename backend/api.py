@@ -98,6 +98,22 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+# Define the get_codegen_config function
+def get_codegen_config() -> CodegenConfig:
+    """Get Codegen configuration from environment variables"""
+    org_id = os.getenv("CODEGEN_ORG_ID")
+    token = os.getenv("CODEGEN_TOKEN")
+    base_url = os.getenv("CODEGEN_BASE_URL")
+    
+    if not org_id or not token:
+        raise ValueError("Missing CODEGEN_ORG_ID or CODEGEN_TOKEN environment variables")
+    
+    return CodegenConfig(
+        org_id=org_id,
+        token=token,
+        base_url=base_url
+    )
+
 # Enhanced Agent Client for better error handling and status tracking
 class AgentClient:
     def __init__(self, org_id: str, token: str, base_url: Optional[str] = None):
