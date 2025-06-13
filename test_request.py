@@ -63,16 +63,29 @@ def test_streaming():
                 
             try:
                 data = json.loads(event.data)
-                timestamp = datetime.fromisoformat(data["timestamp"]).strftime("%H:%M:%S")
+                
+                # Skip heartbeat events
+                if data.get("status") == "heartbeat":
+                    continue
+                
+                # Format timestamp if available
+                timestamp = ""
+                if "timestamp" in data:
+                    try:
+                        timestamp = datetime.fromisoformat(data["timestamp"]).strftime("%H:%M:%S")
+                    except (ValueError, TypeError):
+                        timestamp = "??:??:??"
+                else:
+                    timestamp = datetime.now().strftime("%H:%M:%S")
                 
                 if "current_step" in data:
                     print(f"\n[{timestamp}] Step: {data['current_step']}")
-                elif data["status"] == "completed":
-                    print(f"\n[{timestamp}] Completed: {data['result']}")
-                elif data["status"] == "failed":
-                    print(f"\n[{timestamp}] Failed: {data['error']}")
+                elif data.get("status") == "completed":
+                    print(f"\n[{timestamp}] Completed: {data.get('result', 'No result provided')}")
+                elif data.get("status") == "failed" or data.get("status") == "error":
+                    print(f"\n[{timestamp}] Failed: {data.get('error', 'Unknown error')}")
                 else:
-                    print(f"\n[{timestamp}] Status: {data['status']}")
+                    print(f"\n[{timestamp}] Status: {data.get('status', 'unknown')}")
                 
                 if "web_url" in data and data["web_url"]:
                     print(f"View at: {data['web_url']}")
@@ -89,5 +102,41 @@ def test_streaming():
         client.close()
         print("-" * 50)
 
+def test_connection():
+    """Test the connection to the backend API"""
+    print("\n🔌 Testing connection to backend API...\n")
+    
+    try:
+        response = requests.post(
+            "http://localhost:8002/api/v1/test-connection",
+            headers={
+                "Content-Type": "application/json",
+                "X-Organization-ID": org_id,
+                "X-API-Token": token
+            }
+        )
+        
+        if response.ok:
+            data = response.json()
+            print("✅ Connection successful!")
+            print(f"Status: {data.get('status', 'unknown')}")
+            print(f"Message: {data.get('message', 'No message')}")
+            print(f"Organization ID: {data.get('org_id', 'Not provided')}")
+            print(f"Base URL: {data.get('base_url', 'Not provided')}")
+            return True
+        else:
+            print(f"❌ Connection failed: {response.status_code}")
+            print(response.text)
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error testing connection: {e}")
+        return False
+
 if __name__ == "__main__":
-    test_streaming()
+    if test_connection():
+        test_streaming()
+    else:
+        print("\n⚠️ Connection test failed. Skipping streaming test.")
+        sys.exit(1)
+

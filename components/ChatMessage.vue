@@ -158,9 +158,30 @@ const props = defineProps({
 
 const emit = defineEmits(['copy'])
 
+// Configure marked for better code highlighting
+marked.setOptions({
+  highlight: function(code, lang) {
+    return code;
+  },
+  breaks: true,
+  gfm: true
+})
+
 const renderMarkdown = (content) => {
   if (!content) return ''
-  return marked(content)
+  
+  try {
+    // Sanitize content to prevent XSS
+    const sanitizedContent = content
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    
+    // Process markdown
+    return marked(sanitizedContent)
+  } catch (error) {
+    console.error('Error rendering markdown:', error)
+    return content || ''
+  }
 }
 
 const formatTime = (timestamp) => {
@@ -178,6 +199,7 @@ const getStatusText = (status) => {
       return 'In Queue'
     case 'running':
     case 'active':
+    case 'initiated':
       return 'Processing'
     case 'completed':
       return 'Completed'

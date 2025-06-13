@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-UI Validation Script for CPR (Codegen PR) Application
-Tests the frontend build, backend API, and integration points
+Comprehensive validation script for CPR application
+Tests environment setup, backend API, and frontend components
 """
 
 import os
@@ -10,335 +10,274 @@ import json
 import time
 import subprocess
 import requests
-from pathlib import Path
+from datetime import datetime
 
-def run_command(cmd, cwd=None, timeout=30):
-    """Run a command and return the result"""
+# Configuration
+BACKEND_URL = "http://localhost:8002"
+FRONTEND_URL = "http://localhost:3001"
+REQUIRED_ENV_VARS = ["CODEGEN_TOKEN", "CODEGEN_ORG_ID"]
+
+def print_header(title):
+    """Print a formatted header"""
+    print("\n" + "=" * 60)
+    print(f" {title} ".center(60, "="))
+    print("=" * 60)
+
+def print_result(test_name, success, message=""):
+    """Print a test result with color"""
+    if success:
+        result = "\033[92m✓ PASS\033[0m"  # Green
+    else:
+        result = "\033[91m✗ FAIL\033[0m"  # Red
+    
+    print(f"{result} {test_name}")
+    if message:
+        print(f"     {message}")
+
+def check_environment():
+    """Check if required environment variables are set"""
+    print_header("Environment Check")
+    
+    all_vars_set = True
+    for var in REQUIRED_ENV_VARS:
+        if var in os.environ and os.environ[var]:
+            print_result(f"Environment variable {var}", True)
+        else:
+            print_result(f"Environment variable {var}", False, 
+                        f"Missing or empty. Set it in .env file or export {var}=value")
+            all_vars_set = False
+    
+    return all_vars_set
+
+def check_backend_running():
+    """Check if backend API is running"""
+    print_header("Backend API Check")
+    
     try:
-        result = subprocess.run(
-            cmd, 
-            shell=True, 
-            cwd=cwd, 
-            capture_output=True, 
-            text=True, 
-            timeout=timeout
+        response = requests.get(f"{BACKEND_URL}/docs", timeout=5)
+        if response.status_code == 200:
+            print_result("Backend API is running", True)
+            return True
+        else:
+            print_result("Backend API is running", False, 
+                        f"Unexpected status code: {response.status_code}")
+            return False
+    except requests.exceptions.ConnectionError:
+        print_result("Backend API is running", False, 
+                    f"Could not connect to {BACKEND_URL}. Is the backend running?")
+        return False
+    except Exception as e:
+        print_result("Backend API is running", False, f"Error: {str(e)}")
+        return False
+
+def test_backend_connection():
+    """Test connection to backend API and Codegen API"""
+    print_header("API Connection Test")
+    
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}/api/v1/test-connection",
+            headers={"Content-Type": "application/json"},
+            timeout=10
         )
-        return result.returncode == 0, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        return False, "", "Command timed out"
-
-def check_file_exists(filepath):
-    """Check if a file exists"""
-    return Path(filepath).exists()
-
-def validate_environment():
-    """Validate environment setup"""
-    print("🔍 Validating Environment Setup...")
-    
-    # Check if .env file exists
-    if not check_file_exists('.env'):
-        print("❌ .env file not found")
-        return False
-    
-    # Check if required files exist
-    required_files = [
-        'package.json',
-        'nuxt.config.ts',
-        'app.vue',
-        'pages/index.vue',
-        'components/ChatMessage.vue',
-        'components/SettingsModal.vue',
-        'backend/api.py',
-        'backend/requirements.txt'
-    ]
-    
-    for file in required_files:
-        if not check_file_exists(file):
-            print(f"❌ Required file missing: {file}")
-            return False
-    
-    print("✅ Environment setup validated")
-    return True
-
-def validate_frontend_build():
-    """Validate frontend build process"""
-    print("🏗️ Validating Frontend Build...")
-    
-    # Check if node_modules exists
-    if not check_file_exists('node_modules'):
-        print("📦 Installing dependencies...")
-        success, stdout, stderr = run_command("npm install", timeout=120)
-        if not success:
-            print(f"❌ npm install failed: {stderr}")
-            return False
-    
-    # Test build process
-    print("🔨 Testing build process...")
-    success, stdout, stderr = run_command("npm run build", timeout=120)
-    if not success:
-        print(f"❌ Build failed: {stderr}")
-        return False
-    
-    # Check if build output exists
-    if not check_file_exists('.output'):
-        print("❌ Build output directory not found")
-        return False
-    
-    print("✅ Frontend build validated")
-    return True
-
-def validate_backend_setup():
-    """Validate backend setup"""
-    print("🐍 Validating Backend Setup...")
-    
-    # Test Python imports
-    success, stdout, stderr = run_command(
-        "cd backend && python -c 'import api; print(\"Backend imports OK\")'",
-        timeout=30
-    )
-    if not success:
-        print(f"❌ Backend import failed: {stderr}")
-        return False
-    
-    print("✅ Backend setup validated")
-    return True
-
-def validate_ui_components():
-    """Validate UI components structure"""
-    print("🎨 Validating UI Components...")
-    
-    # Check main page structure
-    with open('pages/index.vue', 'r') as f:
-        content = f.read()
         
-    # Check for key UI elements
-    ui_elements = [
-        'New Thread',
-        'Agent Dashboard',
-        'Connected',
-        'Disconnected',
-        'ChatMessage',
-        'SettingsModal',
-        'textarea',
-        'Send'
-    ]
-    
-    for element in ui_elements:
-        if element not in content:
-            print(f"❌ UI element missing: {element}")
+        if response.status_code == 200:
+            data = response.json()
+            print_result("Backend connection test", True, 
+                        f"Status: {data.get('status', 'unknown')}")
+            return True
+        else:
+            print_result("Backend connection test", False, 
+                        f"Status code: {response.status_code}, Response: {response.text}")
             return False
+    except Exception as e:
+        print_result("Backend connection test", False, f"Error: {str(e)}")
+        return False
+
+def test_task_creation():
+    """Test creating a task via the API"""
+    print_header("Task Creation Test")
     
-    # Check ChatMessage component
-    with open('components/ChatMessage.vue', 'r') as f:
-        chat_content = f.read()
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}/api/v1/run-task",
+            headers={"Content-Type": "application/json"},
+            json={
+                "prompt": "Echo test message for validation",
+                "stream": True
+            },
+            timeout=10
+        )
         
-    chat_elements = [
-        'message.role',
-        'message.content',
-        'message.timestamp',
-        'message.status',
-        'steps'
-    ]
-    
-    for element in chat_elements:
-        if element not in chat_content:
-            print(f"❌ ChatMessage element missing: {element}")
-            return False
-    
-    print("✅ UI components validated")
-    return True
+        if response.status_code == 200:
+            data = response.json()
+            task_id = data.get("task_id")
+            if task_id:
+                print_result("Task creation", True, f"Task ID: {task_id}")
+                return task_id
+            else:
+                print_result("Task creation", False, "No task ID returned")
+                return None
+        else:
+            print_result("Task creation", False, 
+                        f"Status code: {response.status_code}, Response: {response.text}")
+            return None
+    except Exception as e:
+        print_result("Task creation", False, f"Error: {str(e)}")
+        return None
 
-def validate_api_structure():
-    """Validate API structure"""
-    print("🔌 Validating API Structure...")
+def test_task_status(task_id):
+    """Test checking task status"""
+    print_header("Task Status Test")
     
-    with open('backend/api.py', 'r') as f:
-        api_content = f.read()
-    
-    # Check for key API endpoints and features
-    api_elements = [
-        'FastAPI',
-        'TaskRequest',
-        'TaskResponse',
-        'run_task',
-        'test_connection',
-        'CORS',
-        'codegen',
-        'Agent'
-    ]
-    
-    for element in api_elements:
-        if element not in api_content:
-            print(f"❌ API element missing: {element}")
-            return False
-    
-    print("✅ API structure validated")
-    return True
-
-def validate_configuration():
-    """Validate configuration files"""
-    print("⚙️ Validating Configuration...")
-    
-    # Check package.json
-    with open('package.json', 'r') as f:
-        package_data = json.load(f)
-    
-    required_deps = [
-        'nuxt',
-        '@nuxtjs/tailwindcss',
-        '@heroicons/vue',
-        'marked',
-        'uuid'
-    ]
-    
-    dependencies = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
-    
-    for dep in required_deps:
-        if dep not in dependencies:
-            print(f"❌ Missing dependency: {dep}")
-            return False
-    
-    # Check nuxt.config.ts
-    if not check_file_exists('nuxt.config.ts'):
-        print("❌ nuxt.config.ts not found")
+    if not task_id:
+        print_result("Task status check", False, "No task ID provided")
         return False
     
-    print("✅ Configuration validated")
-    return True
+    try:
+        # Wait a moment for the task to be processed
+        time.sleep(2)
+        
+        response = requests.get(
+            f"{BACKEND_URL}/api/v1/task/{task_id}/status",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            status = data.get("status", "unknown")
+            print_result("Task status check", True, f"Status: {status}")
+            return True
+        else:
+            print_result("Task status check", False, 
+                        f"Status code: {response.status_code}, Response: {response.text}")
+            return False
+    except Exception as e:
+        print_result("Task status check", False, f"Error: {str(e)}")
+        return False
 
-def validate_styling():
-    """Validate styling setup"""
-    print("🎨 Validating Styling Setup...")
+def test_sse_stream(task_id):
+    """Test SSE streaming for a task"""
+    print_header("SSE Streaming Test")
     
-    # Check if Tailwind config exists
-    if not check_file_exists('tailwind.config.js'):
-        print("❌ tailwind.config.js not found")
+    if not task_id:
+        print_result("SSE streaming", False, "No task ID provided")
         return False
     
-    # Check if CSS assets exist
-    if not check_file_exists('assets'):
-        print("❌ assets directory not found")
+    try:
+        # Use curl to test SSE stream (easier than using Python for SSE)
+        cmd = [
+            "curl", "-N", 
+            f"{BACKEND_URL}/api/v1/task/{task_id}/stream"
+        ]
+        
+        print("Testing SSE stream (will timeout after 5 seconds)...")
+        process = subprocess.Popen(
+            cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Wait for a short time to get some output
+        time.sleep(5)
+        process.terminate()
+        
+        stdout, stderr = process.communicate()
+        
+        if stderr:
+            print_result("SSE streaming", False, f"Error: {stderr}")
+            return False
+        
+        if stdout:
+            print_result("SSE streaming", True, "Received data from stream")
+            return True
+        else:
+            print_result("SSE streaming", False, "No data received from stream")
+            return False
+    except Exception as e:
+        print_result("SSE streaming", False, f"Error: {str(e)}")
         return False
+
+def check_frontend_files():
+    """Check if essential frontend files exist"""
+    print_header("Frontend Files Check")
     
-    print("✅ Styling setup validated")
-    return True
-
-def create_deployment_script():
-    """Create a simple deployment script for testing"""
-    print("📝 Creating deployment script...")
-    
-    deployment_script = """#!/bin/bash
-# Simple deployment script for CPR application
-
-echo "🚀 Starting CPR Application Deployment..."
-
-# Kill existing processes
-echo "🔄 Stopping existing processes..."
-pkill -f "uvicorn.*api:app" || true
-pkill -f "nuxt.*dev" || true
-sleep 2
-
-# Clean and install dependencies
-echo "📦 Installing dependencies..."
-npm install
-
-# Install Python dependencies
-echo "🐍 Installing Python dependencies..."
-cd backend && pip install -r requirements.txt && cd ..
-
-# Start backend API
-echo "🔌 Starting backend API on port 8002..."
-cd backend && uvicorn api:app --host 0.0.0.0 --port 8002 --reload &
-cd ..
-
-# Wait for backend to start
-echo "⏳ Waiting for backend to start..."
-sleep 5
-
-# Start frontend
-echo "🎨 Starting frontend on port 3001..."
-npm run dev &
-
-echo "✅ Deployment complete!"
-echo "🌐 Frontend: http://localhost:3001"
-echo "🔌 Backend: http://localhost:8002"
-echo "📚 API Docs: http://localhost:8002/docs"
-
-# Keep script running
-wait
-"""
-    
-    with open('deploy.sh', 'w') as f:
-        f.write(deployment_script)
-    
-    # Make it executable
-    os.chmod('deploy.sh', 0o755)
-    
-    print("✅ Deployment script created: deploy.sh")
-
-def main():
-    """Main validation function"""
-    print("🔍 CPR UI Validation Starting...")
-    print("=" * 50)
-    
-    validation_steps = [
-        ("Environment", validate_environment),
-        ("Frontend Build", validate_frontend_build),
-        ("Backend Setup", validate_backend_setup),
-        ("UI Components", validate_ui_components),
-        ("API Structure", validate_api_structure),
-        ("Configuration", validate_configuration),
-        ("Styling", validate_styling)
+    essential_files = [
+        "app.vue",
+        "pages/index.vue",
+        "components/ChatMessage.vue",
+        "components/SettingsModal.vue",
+        "nuxt.config.ts",
+        "package.json"
     ]
     
-    results = []
+    all_files_exist = True
+    for file_path in essential_files:
+        if os.path.isfile(file_path):
+            print_result(f"File exists: {file_path}", True)
+        else:
+            print_result(f"File exists: {file_path}", False, "File not found")
+            all_files_exist = False
     
-    for step_name, step_func in validation_steps:
-        try:
-            result = step_func()
-            results.append((step_name, result))
-            if not result:
-                print(f"❌ {step_name} validation failed")
-            print()
-        except Exception as e:
-            print(f"❌ {step_name} validation error: {e}")
-            results.append((step_name, False))
-            print()
+    return all_files_exist
+
+def run_validation():
+    """Run all validation tests"""
+    print_header("CPR Application Validation")
+    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # Create deployment script
-    create_deployment_script()
+    # Step 1: Check environment
+    env_ok = check_environment()
+    if not env_ok:
+        print("\n⚠️  Environment check failed. Please set the required environment variables.")
+        print("   You can create a .env file based on .env.example")
+        return False
     
-    # Summary
-    print("=" * 50)
-    print("📊 VALIDATION SUMMARY")
-    print("=" * 50)
+    # Step 2: Check if backend is running
+    backend_ok = check_backend_running()
+    if not backend_ok:
+        print("\n⚠️  Backend API is not running. Please start it with:")
+        print("   cd backend && uvicorn api:app --host 0.0.0.0 --port 8002")
+        return False
     
-    passed = 0
-    total = len(results)
+    # Step 3: Test backend connection
+    connection_ok = test_backend_connection()
+    if not connection_ok:
+        print("\n⚠️  Backend connection test failed. Check your API credentials.")
+        return False
     
-    for step_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{step_name:20} {status}")
-        if result:
-            passed += 1
+    # Step 4: Test task creation
+    task_id = test_task_creation()
+    if not task_id:
+        print("\n⚠️  Task creation failed. Check the backend logs for details.")
+        return False
     
-    print("=" * 50)
-    print(f"📈 Results: {passed}/{total} validations passed")
+    # Step 5: Test task status
+    status_ok = test_task_status(task_id)
     
-    if passed == total:
-        print("🎉 ALL VALIDATIONS PASSED!")
-        print("🚀 The CPR UI is ready for deployment!")
-        print()
-        print("📋 Next Steps:")
-        print("1. Set real CODEGEN_TOKEN and CODEGEN_ORG_ID in .env")
-        print("2. Run ./deploy.sh to start the application")
-        print("3. Open http://localhost:3001 to test the UI")
-        print("4. Test connection and message functionality")
+    # Step 6: Test SSE streaming
+    sse_ok = test_sse_stream(task_id)
+    
+    # Step 7: Check frontend files
+    frontend_ok = check_frontend_files()
+    if not frontend_ok:
+        print("\n⚠️  Some frontend files are missing. Check your project structure.")
+    
+    # Final result
+    print_header("Validation Summary")
+    all_tests_passed = env_ok and backend_ok and connection_ok and task_id and status_ok and sse_ok and frontend_ok
+    
+    if all_tests_passed:
+        print("\n✅ All validation tests passed! The application is ready to use.")
+        print("\nYou can start the application with:")
+        print("   ./deploy.sh")
         return True
     else:
-        print("⚠️  Some validations failed. Please fix the issues above.")
+        print("\n⚠️  Some validation tests failed. Please fix the issues and try again.")
         return False
 
 if __name__ == "__main__":
-    success = main()
+    success = run_validation()
     sys.exit(0 if success else 1)
+

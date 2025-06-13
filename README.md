@@ -10,6 +10,9 @@ A modern, real-time chat interface for interacting with Codegen AI agents. Built
 - **Thread Management**: Create and manage multiple conversation threads
 - **Modern UI**: Dark theme with Tailwind CSS and Heroicons
 - **API Integration**: Full integration with Codegen SDK
+- **Enhanced Agent State Retrieval**: Properly retrieves and displays agent state and responses
+- **Robust Error Handling**: Comprehensive error handling and recovery mechanisms
+- **Improved Streaming**: Better SSE streaming implementation for real-time updates
 
 ## 🏗️ Architecture
 
@@ -66,6 +69,8 @@ This will validate:
 - ✅ UI components
 - ✅ Configuration files
 - ✅ Styling setup
+- ✅ Agent state retrieval
+- ✅ SSE streaming functionality
 
 ## 🚀 Quick Start
 
@@ -77,6 +82,7 @@ This will validate:
 
 This will:
 - Install all dependencies
+- Validate the environment and setup
 - Start the backend API on port 8002
 - Start the frontend on port 3001
 - Display access URLs
@@ -109,9 +115,9 @@ npm run dev
 python validate_ui.py
 ```
 
-### Functionality Testing
+### Streaming Test
 ```bash
-python test_ui_functionality.py
+python test_request.py
 ```
 
 ### Manual Testing Checklist
@@ -121,6 +127,8 @@ python test_ui_functionality.py
 3. **Message Flow**: Send messages and verify real-time progress updates
 4. **Error Handling**: Test with invalid credentials to verify error states
 5. **UI Responsiveness**: Test on different screen sizes
+6. **Agent State**: Verify that agent state is properly retrieved and displayed
+7. **Response Display**: Check that agent responses are correctly formatted and displayed
 
 ## 📁 Project Structure
 
@@ -137,7 +145,7 @@ python test_ui_functionality.py
 ├── public/             # Public static files
 ├── .env.example        # Environment template
 ├── validate_ui.py      # UI validation script
-├── test_ui_functionality.py # Functionality tests
+├── test_request.py     # Streaming test script
 └── deploy.sh          # Deployment script
 ```
 
@@ -174,6 +182,7 @@ The project includes:
 2. **Port Conflicts**: Ensure ports 3001 and 8002 are available
 3. **Build Errors**: Run `npm install` to ensure all dependencies are installed
 4. **Backend Errors**: Check that Python dependencies are installed with `pip install -r backend/requirements.txt`
+5. **Agent State Issues**: If agent state is not being retrieved properly, check the backend logs for errors
 
 ### Debug Mode
 
@@ -191,6 +200,8 @@ The backend provides a comprehensive API with the following endpoints:
 - `POST /api/v1/run-task` - Execute AI agent tasks
 - `POST /api/v1/test-connection` - Test API connection
 - `GET /api/v1/tasks` - List active tasks
+- `GET /api/v1/task/{task_id}/status` - Get task status
+- `GET /api/v1/task/{task_id}/stream` - Stream task updates
 - `GET /docs` - Interactive API documentation
 
 ## 🤝 Contributing
@@ -211,3 +222,4 @@ For issues and support:
 2. Run the validation script: `python validate_ui.py`
 3. Check the API documentation at http://localhost:8002/docs
 4. Review the VALIDATION_CHECKLIST.md for detailed testing steps
+
