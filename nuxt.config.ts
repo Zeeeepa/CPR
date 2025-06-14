@@ -11,7 +11,7 @@ export default defineNuxtConfig({
   },
   ssr: false,
   devServer: {
-    port: 3001
+    port: 3002
   },
   tailwindcss: {
     cssPath: '~/assets/css/main.css',
