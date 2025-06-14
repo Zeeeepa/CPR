@@ -319,7 +319,14 @@ async def process_message(message_id: str, content: str, org_id: str, token: str
             
             # Update message with response
             messages[message_id]["status"] = "completed"
-            messages[message_id]["response"] = str(response)
+            # Convert the response object to a string representation that can be displayed in UI
+            if hasattr(response, '__dict__'):
+                # If it's an object with attributes, convert to a dictionary
+                response_dict = {k: str(v) for k, v in response.__dict__.items() if not k.startswith('_')}
+                messages[message_id]["response"] = json.dumps(response_dict)
+            else:
+                # Otherwise use string representation
+                messages[message_id]["response"] = str(response)
             messages[message_id]["completed_at"] = datetime.now().isoformat()
         except Exception as e:
             # If run method fails
