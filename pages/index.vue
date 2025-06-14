@@ -286,15 +286,14 @@ const forceCheckTaskStatus = async (taskId: string, aiMessage: Message) => {
           
           // Add completion step if not already present
           const hasCompletionStep = aiMessage.steps.some(step => 
-            step.title.toLowerCase().includes('completed') || 
-            step.title.toLowerCase().includes('finished')
+            step.title.toLowerCase().includes('complete') || 
+            step.title.toLowerCase().includes('finish')
           )
           
           if (!hasCompletionStep) {
             aiMessage.steps.push({
-              id: aiMessage.steps.length + 1,
-              title: 'Task Completed',
-              description: 'Response generated successfully',
+              title: 'Task completed',
+              description: 'The task has been successfully completed.',
               status: 'completed'
             })
           }
@@ -941,13 +940,10 @@ const sendMessage = async () => {
           }
           
           // Handle completion or result field
-          if (parsed.status === 'completed' || parsed.result) {
-            console.log('Task completion or result detected:', parsed)
-            
-            // Ensure we have actual response text
+          if (parsed.status === 'completed') {
             let finalResponse = parsed.result || 'Task completed successfully.'
             
-            // If the result looks like a generic message, try to get more details
+            // If we only have a generic message but have a web URL, add it
             if (finalResponse === 'Task completed successfully.' && parsed.web_url) {
               finalResponse = `Task completed successfully. View full details at: ${parsed.web_url}`
             }
