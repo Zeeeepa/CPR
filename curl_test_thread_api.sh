@@ -32,7 +32,7 @@ echo
 
 # Step 1: Create a thread
 echo "=== Creating Thread ==="
-THREAD_RESPONSE=$(curl -s "${BACKEND_URL}/api/v1/threads" \
+THREAD_RESPONSE=$(curl -s "${BACKEND_URL}/api/v1/threads/" \
   "${HEADERS[@]}" \
   -d "{\"name\": \"Curl Test Thread $(date +"%Y-%m-%d %H:%M:%S")\"}" \
   -X POST)
@@ -125,4 +125,3 @@ echo "Thread ID: $THREAD_ID"
 echo "Message ID: $MESSAGE_ID"
 echo
 echo "You can now check the UI to see if the thread and message are displayed correctly."
-

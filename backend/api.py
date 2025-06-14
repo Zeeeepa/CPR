@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 # Import thread management API
-from thread_api import router as thread_router
+from backend.thread_api import router as thread_router
 
 # Load environment variables from .env file
 load_dotenv()

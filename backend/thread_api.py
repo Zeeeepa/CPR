@@ -23,6 +23,9 @@ load_dotenv()
 org_id = os.getenv("CODEGEN_ORG_ID")
 token = os.getenv("CODEGEN_TOKEN")
 
+# Print environment variables for debugging
+print(f"Environment variables loaded: CODEGEN_ORG_ID={org_id}, CODEGEN_TOKEN={token[:10] if token else None}...")
+
 # Import the official Codegen SDK
 try:
     from codegen.agents.agent import Agent, AgentTask
@@ -341,4 +344,3 @@ async def process_message(message_id: str, content: str, org_id: str, token: str
         messages[message_id]["status"] = "failed"
         messages[message_id]["response"] = f"Error: {str(e)}"
         messages[message_id]["completed_at"] = datetime.now().isoformat()
-
