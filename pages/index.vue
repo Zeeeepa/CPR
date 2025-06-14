@@ -137,6 +137,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import ChatMessage from '~/components/ChatMessage.vue'
 import SettingsModal from '~/components/SettingsModal.vue'
+import { useSettings } from '~/composables/useSettings'
 
 interface Thread {
   id: string;
@@ -185,23 +186,14 @@ const connectionTesting = ref(false)
 const activeTasks = ref(0)
 const messagesContainer = ref<HTMLElement | null>(null)
 
-// Settings
-const settings = ref({
-  codegenToken: '',
-  codegenOrgId: '',
-  apiBaseUrl: ''
-})
+// Get settings from our composable
+const { settings } = useSettings()
 
 // Hardcoded backend URL (no longer configurable)
 const BACKEND_URL = 'http://localhost:8002'
 
 // Load settings from localStorage
 onMounted(() => {
-  const savedSettings = localStorage.getItem('settings')
-  if (savedSettings) {
-    settings.value = JSON.parse(savedSettings)
-  }
-
   const savedThreads = localStorage.getItem('threads')
   if (savedThreads) {
     threads.value = JSON.parse(savedThreads)
@@ -419,6 +411,7 @@ const saveSettings = (newSettings: typeof settings.value) => {
   testConnection()
 }
 
+// Save threads to localStorage
 const saveToLocalStorage = () => {
   localStorage.setItem('threads', JSON.stringify(threads.value))
 }
@@ -450,6 +443,7 @@ const deleteThread = (threadId: string) => {
   }
 }
 
+// Toggle settings modal
 const toggleSettings = () => {
   showSettings.value = !showSettings.value
 }
