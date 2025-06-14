@@ -65,7 +65,7 @@ echo ""
 # Start backend server
 echo -e "${GREEN}Starting backend server...${NC}"
 cd backend
-nohup python -m uvicorn api:app --host 0.0.0.0 --port 8002 > server.log 2>&1 &
+nohup python -m uvicorn api:app --host 0.0.0.0 --port 8002 --reload > server.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 echo "Logs available at: backend/server.log"
@@ -124,7 +124,7 @@ echo ""
 
 # Run validation
 echo -e "${GREEN}Running validation...${NC}"
-python validate_ui.py
+python tests/ui/validate_ui.py
 VALIDATION_RESULT=$?
 
 if [ $VALIDATION_RESULT -eq 0 ]; then
