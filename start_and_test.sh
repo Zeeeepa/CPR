@@ -3,14 +3,28 @@
 # Start and test the CPR application
 echo "Starting CPR application..."
 
+# Load environment variables from .env file if it exists
+echo "Loading environment variables..."
+if [ -f .env ]; then
+    echo "Found .env file, loading variables..."
+    export $(grep -v '^#' .env | xargs)
+    echo "Environment variables loaded successfully."
+else
+    echo "No .env file found. Will use existing environment variables."
+fi
+
 # Check if environment variables are set
 if [ -z "$CODEGEN_ORG_ID" ] || [ -z "$CODEGEN_TOKEN" ]; then
     echo "Error: CODEGEN_ORG_ID and CODEGEN_TOKEN environment variables must be set."
     echo "Please set them with:"
     echo "export CODEGEN_ORG_ID=your_org_id"
     echo "export CODEGEN_TOKEN=your_token"
+    echo "Or create a .env file with these variables."
     exit 1
 fi
+
+echo "Using CODEGEN_ORG_ID: $CODEGEN_ORG_ID"
+echo "Using CODEGEN_TOKEN: ${CODEGEN_TOKEN:0:10}..."
 
 # Kill any existing processes
 echo "Stopping any existing processes..."
