@@ -277,19 +277,61 @@ class AgentClient:
     
     def _extract_result(self, task) -> str:
         """Extract result from task using multiple fallback methods"""
+        logger.info(f"Extracting result from task: {type(task)}")
+        
+        # Debug: Print all task attributes
+        logger.info("=== TASK RESULT DEBUG ===")
+        for attr in dir(task):
+            if not attr.startswith('_'):
+                try:
+                    value = getattr(task, attr)
+                    if not callable(value):
+                        logger.info(f"task.{attr} = {value} (type: {type(value)})")
+                except Exception as e:
+                    logger.info(f"task.{attr} = ERROR: {e}")
+        logger.info("=== END TASK RESULT DEBUG ===")
+        
         # Method 1: Direct result attribute
         if hasattr(task, 'result') and task.result:
+            logger.info(f"Found task.result: {task.result} (type: {type(task.result)})")
             if isinstance(task.result, str):
                 return task.result
             elif isinstance(task.result, dict):
-                return task.result.get('content') or task.result.get('response') or str(task.result)
+                # Try to extract content from various possible keys
+                for key in ['content', 'response', 'message', 'text', 'answer']:
+                    if key in task.result and task.result[key]:
+                        logger.info(f"Extracted result from key '{key}': {task.result[key]}")
+                        return task.result[key]
+                # If no specific key found, return the whole dict as string
+                return str(task.result)
         
-        # Method 2: Web URL fallback
+        # Method 2: Try to access response attribute
+        if hasattr(task, 'response') and task.response:
+            logger.info(f"Found task.response: {task.response} (type: {type(task.response)})")
+            if isinstance(task.response, str):
+                return task.response
+            elif isinstance(task.response, dict):
+                # Try to extract content from various possible keys
+                for key in ['content', 'message', 'text', 'answer']:
+                    if key in task.response and task.response[key]:
+                        logger.info(f"Extracted result from response.{key}: {task.response[key]}")
+                        return task.response[key]
+                # If no specific key found, return the whole dict as string
+                return str(task.response)
+        
+        # Method 3: Try to access message attribute
+        if hasattr(task, 'message') and task.message:
+            logger.info(f"Found task.message: {task.message}")
+            return str(task.message)
+        
+        # Method 4: Web URL fallback
         if hasattr(task, 'web_url') and task.web_url:
-            return f"Task completed successfully. View details at: {task.web_url}"
+            logger.info(f"Using web_url fallback: {task.web_url}")
+            return f"View complete response at: {task.web_url}"
         
-        # Method 3: Default message
-        return "Task completed successfully."
+        # Method 5: Default message
+        logger.info("No result found, using default message")
+        return "Task completed, but no detailed response was received."
 
 # Global agent client cache
 agent_clients = {}
@@ -308,18 +350,18 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
     try:
         if not task:
             # If no task object, yield an error
-            yield f"data: {json.dumps({'error': 'No task object available'})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps({'error': 'No task object available'})}\\n\\n"
+            yield "data: [DONE]\\n\\n"
             return
         
         # Initial status update
-        yield f"data: {json.dumps({'status': 'initiated', 'task_id': task_id})}\n\n"
+        yield f"data: {json.dumps({'status': 'initiated', 'task_id': task_id})}\\n\\n"
         
         # Get web_url if available
         web_url = None
         if hasattr(task, 'web_url') and task.web_url:
             web_url = task.web_url
-            yield f"data: {json.dumps({'web_url': web_url})}\n\n"
+            yield f"data: {json.dumps({'web_url': web_url})}\\n\\n"
         
         # Poll for updates
         max_retries = 120  # 10 minutes with 5-second intervals
@@ -338,21 +380,52 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
                         active_tasks[task_id]["web_url"] = web_url
                 
                 # Send status update
-                yield f"data: {json.dumps({'status': status, 'task_id': task_id})}\n\n"
+                yield f"data: {json.dumps({'status': status, 'task_id': task_id})}\\n\\n"
                 
                 # Check for completion or failure
                 if status in ["completed", "complete"]:
                     # Extract result
                     result = None
+                    
+                    # Try to get result from task.result
                     if hasattr(task, 'result') and task.result:
                         if isinstance(task.result, str):
                             result = task.result
                         elif isinstance(task.result, dict):
-                            result = task.result.get('content') or task.result.get('response') or str(task.result)
+                            # Try to extract content from various possible keys
+                            for key in ['content', 'response', 'message', 'text', 'answer']:
+                                if key in task.result and task.result[key]:
+                                    result = task.result[key]
+                                    break
+                            # If no specific key found, use the whole dict as string
+                            if not result:
+                                result = str(task.result)
+                    
+                    # Try to get result from task.response if not found
+                    if not result and hasattr(task, 'response') and task.response:
+                        if isinstance(task.response, str):
+                            result = task.response
+                        elif isinstance(task.response, dict):
+                            # Try to extract content from various possible keys
+                            for key in ['content', 'message', 'text', 'answer']:
+                                if key in task.response and task.response[key]:
+                                    result = task.response[key]
+                                    break
+                            # If no specific key found, use the whole dict as string
+                            if not result:
+                                result = str(task.response)
+                    
+                    # Try to get result from task.message if still not found
+                    if not result and hasattr(task, 'message') and task.message:
+                        result = str(task.message)
                     
                     # If no result but we have web_url, use that
                     if not result and web_url:
-                        result = f"Task completed successfully. View details at: {web_url}"
+                        result = f"View complete response at: {web_url}"
+                    
+                    # If still no result, use a default message
+                    if not result:
+                        result = "Task completed, but no detailed response was received."
                     
                     # Update active_tasks with result
                     if task_id in active_tasks:
@@ -365,35 +438,28 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
                     return
                 
                 elif status == "failed":
-                    # Extract error
-                    error = getattr(task, 'error', "Unknown error")
-                    
-                    # Update active_tasks with error
-                    if task_id in active_tasks:
-                        active_tasks[task_id]["error"] = error
-                        active_tasks[task_id]["status"] = "failed"
-                    
                     # Send failure update
-                    yield f"data: {json.dumps({'status': 'failed', 'error': error})}\n\n"
+                    yield f"data: {json.dumps({'status': 'failed', 'error': getattr(task, 'error', 'Unknown error')})}\n\n"
                     yield "data: [DONE]\n\n"
                     return
                 
-                # Wait before next poll
-                await asyncio.sleep(5)
+            # Update web_url if available
+            if hasattr(task, 'web_url') and task.web_url:
+                task_info["web_url"] = task.web_url
                 
             except Exception as e:
                 logger.error(f"Error polling task status: {e}", exc_info=True)
-                yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\\n\\n"
                 # Continue polling despite error
         
         # If we reach here, we've timed out
-        yield f"data: {json.dumps({'status': 'timeout', 'error': 'Task timed out after 10 minutes'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield f"data: {json.dumps({'status': 'timeout', 'error': 'Task timed out after 10 minutes'})}\\n\\n"
+        yield "data: [DONE]\\n\\n"
         
     except Exception as e:
         logger.error(f"Error in stream_task_updates: {e}", exc_info=True)
-        yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\\n\\n"
+        yield "data: [DONE]\\n\\n"
 
 # Lifespan context manager
 @asynccontextmanager
@@ -605,26 +671,69 @@ async def get_task_status(
                 
                 # If task is completed, extract the result
                 if status in ["completed", "complete"]:
-                    # Extract result using helper method
+                    # Extract result
+                    result = None
+                    
+                    # Try to get result from task.result
                     if hasattr(task, 'result') and task.result:
                         if isinstance(task.result, str):
-                            task_info["result"] = task.result
+                            result = task.result
                         elif isinstance(task.result, dict):
-                            task_info["result"] = task.result.get('content') or task.result.get('response') or str(task.result)
+                            # Try to extract content from various possible keys
+                            for key in ['content', 'response', 'message', 'text', 'answer']:
+                                if key in task.result and task.result[key]:
+                                    result = task.result[key]
+                                    break
+                            # If no specific key found, use the whole dict as string
+                            if not result:
+                                result = str(task.result)
+                    
+                    # Try to get result from task.response if not found
+                    if not result and hasattr(task, 'response') and task.response:
+                        if isinstance(task.response, str):
+                            result = task.response
+                        elif isinstance(task.response, dict):
+                            # Try to extract content from various possible keys
+                            for key in ['content', 'message', 'text', 'answer']:
+                                if key in task.response and task.response[key]:
+                                    result = task.response[key]
+                                    break
+                            # If no specific key found, use the whole dict as string
+                            if not result:
+                                result = str(task.response)
+                    
+                    # Try to get result from task.message if still not found
+                    if not result and hasattr(task, 'message') and task.message:
+                        result = str(task.message)
                     
                     # If no result but we have web_url, use that
-                    if not task_info.get("result") and hasattr(task, 'web_url') and task.web_url:
-                        task_info["result"] = f"Task completed successfully. View details at: {task.web_url}"
-                        task_info["web_url"] = task.web_url
-            
-            # Update web_url if available
-            if hasattr(task, 'web_url') and task.web_url:
-                task_info["web_url"] = task.web_url
+                    if not result and web_url:
+                        result = f"View complete response at: {web_url}"
+                    
+                    # If still no result, use a default message
+                    if not result:
+                        result = "Task completed, but no detailed response was received."
+                    
+                    # Update active_tasks with result
+                    if task_id in active_tasks:
+                        active_tasks[task_id]["result"] = result
+                        active_tasks[task_id]["status"] = "completed"
+                    
+                    # Send completion update
+                    yield f"data: {json.dumps({'status': 'completed', 'result': result, 'web_url': web_url})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                
+                elif status == "failed":
+                    # Send failure update
+                    yield f"data: {json.dumps({'status': 'failed', 'error': getattr(task, 'error', 'Unknown error')})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
                 
         except Exception as e:
             logger.error(f"Error refreshing task status: {e}", exc_info=True)
             # Don't update status on error, just continue with what we have
-    
+
     return TaskStatusResponse(
         status=task_info.get("status", "unknown"),
         task_id=task_id,
