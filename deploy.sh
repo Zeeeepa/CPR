@@ -52,23 +52,44 @@ echo "Installing npm packages..."
 npm install
 echo ""
 
-# Check if ports are available
-echo -e "${GREEN}Checking if ports are available...${NC}"
-if lsof -Pi :8002 -sTCP:LISTEN -t >/dev/null ; then
-    echo -e "${YELLOW}Warning: Port 8002 is already in use${NC}"
-    echo "Stopping existing process..."
-    pkill -f "uvicorn api:app" || true
-    sleep 2
-fi
+# Enhanced port cleanup function
+cleanup_port() {
+    local port=$1
+    local killed_processes=0
+    local process_info=""
+    
+    echo -e "${GREEN}Checking for processes using port $port...${NC}"
+    
+    # Get PIDs of processes using the port
+    local pids=$(lsof -ti:$port -sTCP:LISTEN)
+    
+    if [ -n "$pids" ]; then
+        echo -e "${YELLOW}Found processes using port $port. Cleaning up...${NC}"
+        
+        # Get process details before killing them
+        for pid in $pids; do
+            local cmd=$(ps -p $pid -o comm= || echo "Unknown")
+            local cmdline=$(ps -p $pid -o args= || echo "Unknown command")
+            process_info="${process_info}PID: $pid - $cmd - $cmdline\n"
+            killed_processes=$((killed_processes + 1))
+        done
+        
+        # Kill the processes
+        echo "$pids" | xargs kill -9
+        sleep 2
+        
+        echo -e "${YELLOW}Killed $killed_processes processes using port $port:${NC}"
+        echo -e "$process_info"
+    else
+        echo -e "${GREEN}No processes found using port $port${NC}"
+    fi
+}
 
-if lsof -Pi :3002 -sTCP:LISTEN -t >/dev/null ; then
-    echo -e "${YELLOW}Warning: Port 3002 is already in use${NC}"
-    echo "Stopping existing process..."
-    pkill -f "nuxt dev" || true
-    sleep 2
-fi
-
-echo -e "${GREEN}Ports are available${NC}"
+# Check and clean up ports
+echo -e "${GREEN}Checking and cleaning up ports...${NC}"
+cleanup_port 8002  # Backend port
+cleanup_port 3002  # Frontend port
+echo -e "${GREEN}Port cleanup completed${NC}"
 echo ""
 
 # Start backend server
@@ -148,3 +169,4 @@ else
     echo -e "${RED}Validation failed. Please check the logs.${NC}"
     exit 1
 fi
+
