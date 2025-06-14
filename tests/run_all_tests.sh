@@ -17,9 +17,9 @@ echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 # Load environment variables from .env file if it exists
-if [ -f .env ]; then
+if [ -f ../.env ]; then
     echo "Loading environment variables from .env file..."
-    export $(grep -v '^#' .env | xargs)
+    export $(grep -v '^#' ../.env | xargs)
 fi
 
 # Check if required variables are set
@@ -60,9 +60,9 @@ if ! check_backend; then
         echo "Starting backend server in a new terminal..."
         # Start backend server in a new terminal
         if command -v gnome-terminal &> /dev/null; then
-            gnome-terminal -- bash -c "cd $(pwd) && python -m uvicorn backend.api:app --host 0.0.0.0 --port 8002 --reload"
+            gnome-terminal -- bash -c "cd $(pwd)/.. && python -m uvicorn backend.api:app --host 0.0.0.0 --port 8002 --reload"
         elif command -v xterm &> /dev/null; then
-            xterm -e "cd $(pwd) && python -m uvicorn backend.api:app --host 0.0.0.0 --port 8002 --reload" &
+            xterm -e "cd $(pwd)/.. && python -m uvicorn backend.api:app --host 0.0.0.0 --port 8002 --reload" &
         else
             echo "Could not find a suitable terminal emulator. Please start the backend server manually."
             exit 1
@@ -89,13 +89,13 @@ fi
 
 # Run API tests
 echo -e "${GREEN}Running API tests...${NC}"
-python -m tests.api.test_thread_api
-python -m tests.api.test_thread_api_full
-python -m tests.api.test_request
+python -m api.test_thread_api
+python -m api.test_thread_api_full
+python -m api.test_request
 
 # Run UI validation
 echo -e "${GREEN}Running UI validation...${NC}"
-python -m tests.ui.validate_ui
+python -m ui.validate_ui
 
 # Print summary
 echo
@@ -113,3 +113,4 @@ else
     echo "❌ Some tests failed. Please check the output for details."
     exit 1
 fi
+
