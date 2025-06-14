@@ -55,7 +55,18 @@
                 'bg-red-100': message.status === 'failed' || message.status === 'timeout'
               }"
             >
-              <div class="font-medium">{{ message.content || 'Loading...' }}</div>
+              <div class="font-medium mb-2">{{ message.content || 'Loading...' }}</div>
+              
+              <!-- Display response when available -->
+              <div v-if="message.response" class="bg-gray-50 p-2 rounded border mb-2">
+                <div v-if="isJsonString(message.response)" class="response-json">
+                  <pre>{{ formatJson(message.response) }}</pre>
+                </div>
+                <div v-else class="response-text">
+                  {{ message.response }}
+                </div>
+              </div>
+              
               <div class="text-xs text-gray-500 mt-1">
                 Status: {{ message.status }} | 
                 {{ formatDate(message.created_at) }}
@@ -261,6 +272,25 @@ onUnmounted(() => {
     clearInterval(messagePollingInterval)
   }
 })
+
+// Helper methods
+const isJsonString = (str: string) => {
+  try {
+    JSON.parse(str);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+const formatJson = (jsonString: string) => {
+  try {
+    const parsed = JSON.parse(jsonString);
+    return JSON.stringify(parsed, null, 2);
+  } catch (e) {
+    return jsonString;
+  }
+}
 </script>
 
 <style scoped>
@@ -294,4 +324,3 @@ onUnmounted(() => {
   margin-top: auto;
 }
 </style>
-
