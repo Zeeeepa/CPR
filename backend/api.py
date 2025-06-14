@@ -9,6 +9,7 @@ import os
 import json
 import uuid
 import time
+import sys
 from datetime import datetime
 from typing import Optional, Dict, Any, AsyncGenerator, List
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
@@ -19,8 +20,20 @@ import uvicorn
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-# Import thread management API
-from backend.thread_api import router as thread_router
+# Add the parent directory to sys.path to allow importing backend as a module
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+# Try both relative and absolute imports for thread_api
+try:
+    # Try relative import first
+    from .thread_api import router as thread_router
+except ImportError:
+    try:
+        # Fall back to absolute import
+        from backend.thread_api import router as thread_router
+    except ImportError:
+        # Last resort, try direct import
+        from thread_api import router as thread_router
 
 # Load environment variables from .env file
 load_dotenv()
