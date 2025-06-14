@@ -95,7 +95,7 @@ echo ""
 # Start backend server
 echo -e "${GREEN}Starting backend server...${NC}"
 cd backend
-nohup python -m uvicorn api:app --host 0.0.0.0 --port 8002 --reload > server.log 2>&1 &
+nohup python main.py > server.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 echo "Logs available at: backend/server.log"
@@ -169,4 +169,3 @@ else
     echo -e "${RED}Validation failed. Please check the logs.${NC}"
     exit 1
 fi
-
