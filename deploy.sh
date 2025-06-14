@@ -43,6 +43,15 @@ echo "CODEGEN_ORG_ID: $CODEGEN_ORG_ID"
 echo "CODEGEN_TOKEN: ${CODEGEN_TOKEN:0:10}..."
 echo ""
 
+# Install dependencies
+echo -e "${GREEN}Installing dependencies...${NC}"
+echo "Installing Python requirements..."
+pip install -r requirements.txt
+
+echo "Installing npm packages..."
+npm install
+echo ""
+
 # Check if ports are available
 echo -e "${GREEN}Checking if ports are available...${NC}"
 if lsof -Pi :8002 -sTCP:LISTEN -t >/dev/null ; then
