@@ -315,19 +315,70 @@ async def process_message(message_id: str, content: str, org_id: str, token: str
         # Send message to Codegen
         try:
             # Try to use the run method
-            response = agent.run(content)
+            task = agent.run(content)
             
-            # Update message with response
-            messages[message_id]["status"] = "completed"
-            # Convert the response object to a string representation that can be displayed in UI
-            if hasattr(response, '__dict__'):
-                # If it's an object with attributes, convert to a dictionary
-                response_dict = {k: str(v) for k, v in response.__dict__.items() if not k.startswith('_')}
-                messages[message_id]["response"] = json.dumps(response_dict)
-            else:
-                # Otherwise use string representation
-                messages[message_id]["response"] = str(response)
+            # Store task ID if available
+            task_id = None
+            if hasattr(task, 'id') and task.id is not None:
+                task_id = str(task.id)
+            elif hasattr(task, 'agent_run_id') and task.agent_run_id is not None:
+                task_id = str(task.agent_run_id)
+            elif hasattr(task, 'run_id') and task.run_id is not None:
+                task_id = str(task.run_id)
+            
+            if task_id:
+                messages[message_id]["task_id"] = task_id
+            
+            # Store web URL if available
+            if hasattr(task, 'web_url') and task.web_url:
+                messages[message_id]["web_url"] = task.web_url
+            
+            # Wait for task to complete with timeout
+            max_retries = 60  # 5 minutes with 5-second intervals
+            for _ in range(max_retries):
+                # Refresh task to get latest status
+                task.refresh()
+                
+                # Get current status
+                status = task.status.lower() if hasattr(task, 'status') and task.status else "unknown"
+                
+                # If task is completed, extract the result
+                if status in ["completed", "complete"]:
+                    # Extract result
+                    result = None
+                    if hasattr(task, 'result') and task.result:
+                        if isinstance(task.result, str):
+                            result = task.result
+                        elif isinstance(task.result, dict):
+                            result = task.result.get('content') or task.result.get('response') or str(task.result)
+                    
+                    # If no result but we have web_url, use that
+                    if not result and hasattr(task, 'web_url') and task.web_url:
+                        result = f"Task completed successfully. View details at: {task.web_url}"
+                        messages[message_id]["web_url"] = task.web_url
+                    
+                    # Update message with result
+                    messages[message_id]["status"] = "completed"
+                    messages[message_id]["response"] = result
+                    messages[message_id]["completed_at"] = datetime.now().isoformat()
+                    return
+                
+                # If task failed, update with error
+                elif status == "failed":
+                    error = getattr(task, 'error', "Unknown error")
+                    messages[message_id]["status"] = "failed"
+                    messages[message_id]["response"] = f"Error: {error}"
+                    messages[message_id]["completed_at"] = datetime.now().isoformat()
+                    return
+                
+                # Wait before next check
+                await asyncio.sleep(5)
+            
+            # If we reach here, task timed out
+            messages[message_id]["status"] = "timeout"
+            messages[message_id]["response"] = "Task timed out after 5 minutes"
             messages[message_id]["completed_at"] = datetime.now().isoformat()
+            
         except Exception as e:
             # If run method fails
             messages[message_id]["status"] = "failed"
