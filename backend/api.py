@@ -443,15 +443,14 @@ async def stream_task_updates_enhanced(task, task_id: str, thread_id: Optional[s
                     yield "data: [DONE]\n\n"
                     return
                 
-            # Update web_url if available
-            if hasattr(task, 'web_url') and task.web_url:
-                task_info["web_url"] = task.web_url
+                # Wait before next poll
+                await asyncio.sleep(5)
                 
             except Exception as e:
                 logger.error(f"Error polling task status: {e}", exc_info=True)
-                yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\\n\\n"
+                yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\\\n\\\n"
                 # Continue polling despite error
-        
+
         # If we reach here, we've timed out
         yield f"data: {json.dumps({'status': 'timeout', 'error': 'Task timed out after 10 minutes'})}\\n\\n"
         yield "data: [DONE]\\n\\n"
@@ -719,16 +718,14 @@ async def get_task_status(
                         active_tasks[task_id]["result"] = result
                         active_tasks[task_id]["status"] = "completed"
                     
-                    # Send completion update
-                    yield f"data: {json.dumps({'status': 'completed', 'result': result, 'web_url': web_url})}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
+                    # Store the result in task_info for the response
+                    task_info["result"] = result
                 
                 elif status == "failed":
-                    # Send failure update
-                    yield f"data: {json.dumps({'status': 'failed', 'error': getattr(task, 'error', 'Unknown error')})}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
+                    # Update task_info with error
+                    error = getattr(task, 'error', "Unknown error")
+                    task_info["error"] = error
+                    task_info["status"] = "failed"
                 
         except Exception as e:
             logger.error(f"Error refreshing task status: {e}", exc_info=True)
