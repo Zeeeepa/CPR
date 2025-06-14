@@ -293,6 +293,7 @@ async def get_message(
 # Helper function to process messages using Codegen SDK
 async def process_message(message_id: str, content: str, org_id: str, token: str, base_url: Optional[str] = None):
     """Process a message using Codegen SDK"""
+    # ... existing error handling for CODEGEN_AVAILABLE ...
     if not CODEGEN_AVAILABLE:
         # Update message with error
         messages[message_id]["status"] = "failed"
@@ -306,39 +307,25 @@ async def process_message(message_id: str, content: str, org_id: str, token: str
         
         # Initialize Agent with proper parameters
         kwargs = {"org_id": org_id, "token": token}
-        if base_url:
+        if base_url and base_url != "default":
             kwargs["base_url"] = base_url
             
         agent = Agent(**kwargs)
         
         # Send message to Codegen
-        task = agent.create_task(content)
-        
-        # Update message with task ID
-        messages[message_id]["task_id"] = task.task_id
-        
-        # Poll for task completion
-        max_attempts = 30
-        for attempt in range(max_attempts):
-            # Get task status
-            task_status = agent.get_task_status(task.task_id)
+        try:
+            # Try to use the run method
+            response = agent.run(content)
             
-            # Check if task is completed
-            if task_status.get("status") == "completed" or task_status.get("result"):
-                # Update message with response
-                messages[message_id]["status"] = "completed"
-                messages[message_id]["response"] = task_status.get("result")
-                messages[message_id]["completed_at"] = datetime.now().isoformat()
-                return
-            
-            # Wait before checking again
-            await asyncio.sleep(2)
-        
-        # If we get here, the task timed out
-        messages[message_id]["status"] = "timeout"
-        messages[message_id]["response"] = "Task timed out"
-        messages[message_id]["completed_at"] = datetime.now().isoformat()
-        
+            # Update message with response
+            messages[message_id]["status"] = "completed"
+            messages[message_id]["response"] = str(response)
+            messages[message_id]["completed_at"] = datetime.now().isoformat()
+        except Exception as e:
+            # If run method fails
+            messages[message_id]["status"] = "failed"
+            messages[message_id]["response"] = f"Error: {str(e)}"
+            messages[message_id]["completed_at"] = datetime.now().isoformat()
     except Exception as e:
         # Update message with error
         messages[message_id]["status"] = "failed"
