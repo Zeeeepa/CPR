@@ -94,12 +94,10 @@ echo ""
 
 # Start backend server
 echo -e "${GREEN}Starting backend server...${NC}"
-cd backend
-nohup python main.py > server.log 2>&1 &
+nohup python main.py > backend/server.log 2>&1 &
 BACKEND_PID=$!
 echo "Backend server started with PID: $BACKEND_PID"
 echo "Logs available at: backend/server.log"
-cd ..
 echo ""
 
 # Wait for backend to start
