@@ -162,6 +162,19 @@ interface Message {
   error?: boolean;
 }
 
+// Function to format dates
+const formatDate = (date: Date | string) => {
+  if (!date) return 'Unknown date'
+  const d = date instanceof Date ? date : new Date(date)
+  return d.toLocaleDateString(undefined, { 
+    month: 'short', 
+    day: 'numeric',
+    year: d.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
 // State
 const threads = ref<Thread[]>([])
 const currentThread = ref<Thread | null>(null)
