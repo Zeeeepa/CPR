@@ -19,6 +19,13 @@ echo ""
 
 # Check environment variables
 echo -e "${GREEN}Checking environment variables...${NC}"
+
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env file..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
 if [ -z "$CODEGEN_TOKEN" ]; then
     echo -e "${RED}Error: CODEGEN_TOKEN environment variable is not set${NC}"
     echo "Please set it with: export CODEGEN_TOKEN=your_token"
