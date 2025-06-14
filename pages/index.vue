@@ -3,42 +3,41 @@
     <!-- Sidebar -->
     <div class="w-64 bg-gray-800 flex flex-col">
       <!-- New Thread Button -->
-      <button
-        class="m-4 p-3 bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center justify-center gap-2 transition-colors"
-        @click="createNewThread"
+      <button 
+        @click="createNewThread" 
+        class="m-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded flex items-center justify-center"
       >
-        <PlusIcon class="w-5 h-5" />
-        <span>New Thread</span>
+        <span class="mr-2">+</span> New Thread
       </button>
-
+      
       <!-- Thread List -->
-      <div class="flex-1 overflow-y-auto">
-        <div v-for="thread in threads" :key="thread.id" class="px-2">
-          <button
-            class="w-full p-3 rounded-lg text-left hover:bg-gray-700 transition-colors mb-1"
-            :class="{ 'bg-gray-700': currentThread?.id === thread.id }"
-            @click="selectThread(thread)"
-          >
-            <div class="flex items-center justify-between">
-              <div class="flex-1 min-w-0">
-                <h3 class="font-medium truncate">{{ thread.name }}</h3>
-                <p class="text-sm opacity-70 truncate">
-                  {{ thread.messages.length }} messages
-                </p>
-              </div>
-              <button
-                v-if="currentThread?.id === thread.id"
-                class="ml-2 p-1 text-gray-400 hover:text-white transition-colors"
-                @click.stop="deleteThread(thread.id)"
-              >
-                <TrashIcon class="w-4 h-4" />
-              </button>
-            </div>
-          </button>
+      <div class="overflow-y-auto flex-grow">
+        <div 
+          v-for="thread in threads" 
+          :key="thread.id" 
+          @click="selectThread(thread)"
+          class="p-4 hover:bg-gray-700 cursor-pointer"
+          :class="{'bg-gray-700': currentThread && currentThread.id === thread.id}"
+        >
+          <div class="font-medium truncate">{{ thread.name || `Thread ${thread.id.substring(0, 8)}` }}</div>
+          <div class="text-xs text-gray-400">{{ formatDate(thread.lastActivity) }}</div>
         </div>
       </div>
+      
+      <!-- Navigation Links -->
+      <div class="mt-auto p-4 border-t border-gray-700">
+        <NuxtLink to="/threads" class="text-blue-400 hover:text-blue-300 block mb-2">
+          Thread Management
+        </NuxtLink>
+        <button 
+          @click="showSettings = !showSettings" 
+          class="text-blue-400 hover:text-blue-300"
+        >
+          Settings
+        </button>
+      </div>
     </div>
-
+    
     <!-- Main Content -->
     <div class="flex-1 flex flex-col">
       <!-- Header -->
@@ -950,7 +949,7 @@ const sendMessage = async () => {
             aiMessage.content = finalResponse
             aiMessage.sent = true
             aiMessage.taskId = parsed.task_id
-            aiMessage.webUrl = parsed.web_url
+            aiMessage.webUrl = parsed.webUrl
             
             // Mark all steps as completed
             if (aiMessage.steps) {

@@ -19,6 +19,9 @@ import uvicorn
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
+# Import thread management API
+from backend.thread_api import router as thread_router
+
 # Load environment variables from .env file
 load_dotenv()
 # Add this right after load_dotenv() in your code
@@ -97,6 +100,9 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
 )
+
+# Include thread management router
+app.include_router(thread_router)
 
 # Define the get_codegen_config function
 def get_codegen_config() -> CodegenConfig:
