@@ -282,20 +282,29 @@ const forceCheckTaskStatus = async (taskId: string, aiMessage: Message) => {
         
         // Mark all steps as completed
         if (aiMessage.steps) {
-          aiMessage.steps.forEach(step => step.status = 'completed')
+          aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
           
           // Add completion step if not already present
           const hasCompletionStep = aiMessage.steps.some(step => 
-            step.title.toLowerCase().includes('complete') || 
-            step.title.toLowerCase().includes('finish')
+            step.title.toLowerCase().includes('completed') || 
+            step.title.toLowerCase().includes('finished')
           )
           
           if (!hasCompletionStep) {
             aiMessage.steps.push({
-              title: 'Task completed',
-              description: 'The task has been successfully completed.',
+              id: aiMessage.steps.length + 1,
+              title: 'Task Completed',
+              description: 'Response generated successfully',
               status: 'completed'
             })
+          }
+          
+          // Update the "Starting Task" step to completed
+          const startingTaskStep = aiMessage.steps.find(step => 
+            step.title === 'Starting Task'
+          )
+          if (startingTaskStep) {
+            startingTaskStep.status = 'completed'
           }
         }
         
@@ -487,7 +496,7 @@ Please try again or let me know how I can assist you.`
   
   // Mark all steps as completed
   if (aiMessage.steps) {
-    aiMessage.steps.forEach(step => step.status = 'completed')
+    aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
     
     // Add completion step
     aiMessage.steps.push({
@@ -682,7 +691,7 @@ const sendMessage = async () => {
       
       // Mark all steps as completed
       if (aiMessage.steps) {
-        aiMessage.steps.forEach(step => step.status = 'completed')
+        aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
         
         // Add completion step if not already present
         const hasCompletionStep = aiMessage.steps.some(step => 
@@ -697,6 +706,14 @@ const sendMessage = async () => {
             description: 'Response generated successfully',
             status: 'completed'
           })
+        }
+        
+        // Update the "Starting Task" step to completed
+        const startingTaskStep = aiMessage.steps.find(step => 
+          step.title === 'Starting Task'
+        )
+        if (startingTaskStep) {
+          startingTaskStep.status = 'completed'
         }
       }
       
@@ -797,7 +814,7 @@ const sendMessage = async () => {
             
             // Mark all steps as completed
             if (aiMessage.steps) {
-              aiMessage.steps.forEach(step => step.status = 'completed')
+              aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
               
               // Add completion step if not already present
               const hasCompletionStep = aiMessage.steps.some(step => 
@@ -896,7 +913,7 @@ const sendMessage = async () => {
                 
                 // Mark all steps as completed
                 if (aiMessage.steps) {
-                  aiMessage.steps.forEach(step => step.status = 'completed')
+                  aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
                   
                   // Add completion step if not already present
                   const hasCompletionStep = aiMessage.steps.some(step => 
@@ -956,7 +973,7 @@ const sendMessage = async () => {
             
             // Mark all steps as completed
             if (aiMessage.steps) {
-              aiMessage.steps.forEach(step => step.status = 'completed')
+              aiMessage.steps.forEach(step => step.status = 'completed'); const startingTaskStep = aiMessage.steps.find(step => step.title === 'Starting Task'); if (startingTaskStep) { startingTaskStep.status = 'completed'; }
               
               // Add completion step if not already present
               const hasCompletionStep = aiMessage.steps.some(step => 
