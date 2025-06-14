@@ -61,8 +61,8 @@ if lsof -Pi :8002 -sTCP:LISTEN -t >/dev/null ; then
     sleep 2
 fi
 
-if lsof -Pi :3001 -sTCP:LISTEN -t >/dev/null ; then
-    echo -e "${YELLOW}Warning: Port 3001 is already in use${NC}"
+if lsof -Pi :3002 -sTCP:LISTEN -t >/dev/null ; then
+    echo -e "${YELLOW}Warning: Port 3002 is already in use${NC}"
     echo "Stopping existing process..."
     pkill -f "nuxt dev" || true
     sleep 2
@@ -115,7 +115,7 @@ echo -e "${GREEN}Waiting for frontend to start...${NC}"
 MAX_RETRIES=15
 RETRY_COUNT=0
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -s http://localhost:3001/ > /dev/null; then
+    if curl -s http://localhost:3002/ > /dev/null; then
         echo -e "${GREEN}Frontend server is running${NC}"
         break
     fi
@@ -141,11 +141,10 @@ if [ $VALIDATION_RESULT -eq 0 ]; then
     echo -e "${GREEN}================ CPR Application is Ready! =================${NC}"
     echo -e "${GREEN}============================================================${NC}"
     echo "Backend API: http://localhost:8002"
-    echo "Frontend: http://localhost:3001"
+    echo "Frontend: http://localhost:3002"
     echo ""
     echo "To stop the application, run: ./stop.sh"
 else
     echo -e "${RED}Validation failed. Please check the logs.${NC}"
     exit 1
 fi
-
